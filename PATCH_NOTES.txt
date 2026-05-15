@@ -1,6 +1,6 @@
-Venue Host v0.1.0.66
+VenueHost v0.1.0.67
 
-- Added active lineup sidecar persistence under plugin config folder: active_lineup.json.
-- Added DJ Database CSV import/export using dj_database.csv in the plugin config folder.
-- Kept v65 clickable lineup links and SQLite native packaging fix.
-- Code review pass: added comments around persistence paths and kept UI actions explicit/safe for live hosting.
+- Export CSV now opens a Save dialog so staff can choose destination.
+- Import CSV now opens a file picker so staff can choose source CSV.
+- CSV dialogs run on an STA thread for Windows dialog compatibility.
+- Keeps lineup persistence, clickable lineup links, and SQLite packaging fixes from previous builds.

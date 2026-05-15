@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
     <PropertyGroup>
-        <Version>0.1.0.66</Version>
+        <Version>0.1.0.67</Version>
         <AssemblyName>VenueHost</AssemblyName>
         <RootNamespace>VenueHost</RootNamespace>
         <PackageProjectUrl>https://github.com/reyalexffxiv/VenueHost</PackageProjectUrl>
         <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
         <IsPackable>false</IsPackable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <UseWindowsForms>true</UseWindowsForms>
         <!-- Dalamud runs on Windows x64. Setting the RID keeps native SQLite packaging focused on win-x64. -->
         <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     </PropertyGroup>

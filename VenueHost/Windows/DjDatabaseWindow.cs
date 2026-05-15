@@ -4,6 +4,8 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Text;
 using System.Numerics;
+using System.Threading;
+using System.Windows.Forms;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using VenueHost.Models;
@@ -65,9 +67,9 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             this.ImportCsv();
 
         ImGui.SameLine();
-        ImGui.TextDisabled("CSV uses the plugin config folder.");
+        ImGui.TextDisabled("Choose where to save or load the CSV file.");
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(this.GetCsvPath());
+            ImGui.SetTooltip("Export opens a Save dialog. Import opens a file picker.");
 
         if (!string.IsNullOrWhiteSpace(this.csvStatusText))
             ImGui.TextDisabled(this.csvStatusText);
@@ -148,14 +150,25 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     }
 
 
-    private string GetCsvPath()
+    private string GetDefaultCsvPath()
         => Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "dj_database.csv");
 
     private void ExportCsv()
     {
+        var path = ShowSaveCsvDialog(this.GetDefaultCsvPath());
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            this.csvStatusText = "Export cancelled.";
+            return;
+        }
+
+        this.ExportCsv(path);
+    }
+
+    private void ExportCsv(string path)
+    {
         try
         {
-            var path = this.GetCsvPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
 
             var builder = new StringBuilder();
@@ -164,7 +177,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                 builder.AppendLine($"{EscapeCsv(entry.Name)},{EscapeCsv(entry.Link)}");
 
             File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
-            this.csvStatusText = $"Exported {this.plugin.Configuration.DjDatabase.Count} DJs to {Path.GetFileName(path)}.";
+            this.csvStatusText = $"Exported {this.plugin.Configuration.DjDatabase.Count} DJs to {path}.";
         }
         catch (Exception ex)
         {
@@ -174,12 +187,23 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
     private void ImportCsv()
     {
+        var path = ShowOpenCsvDialog(this.GetDefaultCsvPath());
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            this.csvStatusText = "Import cancelled.";
+            return;
+        }
+
+        this.ImportCsv(path);
+    }
+
+    private void ImportCsv(string path)
+    {
         try
         {
-            var path = this.GetCsvPath();
             if (!File.Exists(path))
             {
-                this.csvStatusText = $"Place dj_database.csv in {Plugin.PluginInterface.ConfigDirectory.FullName}, then import.";
+                this.csvStatusText = $"Import failed: file not found, {path}";
                 return;
             }
 
@@ -212,12 +236,84 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             }
 
             this.SaveDatabaseChanges();
-            this.csvStatusText = $"Imported/updated {imported} DJs from {Path.GetFileName(path)}.";
+            this.csvStatusText = $"Imported/updated {imported} DJs from {path}.";
         }
         catch (Exception ex)
         {
             this.csvStatusText = $"Import failed: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Opens a Windows Save dialog on an STA thread. This avoids hard-coding the
+    /// plugin config folder and lets staff export the database wherever they need it.
+    /// </summary>
+    private static string? ShowSaveCsvDialog(string defaultPath)
+    {
+        return RunStaFileDialog(() =>
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Title = "Export DJ Database",
+                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                AddExtension = true,
+                DefaultExt = "csv",
+                FileName = Path.GetFileName(defaultPath),
+                InitialDirectory = Path.GetDirectoryName(defaultPath) ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                OverwritePrompt = true,
+            };
+
+            return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
+        });
+    }
+
+    /// <summary>
+    /// Opens a Windows file picker on an STA thread so users can import a CSV
+    /// from Downloads, Desktop, shared folders, or wherever they keep backups.
+    /// </summary>
+    private static string? ShowOpenCsvDialog(string defaultPath)
+    {
+        return RunStaFileDialog(() =>
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Title = "Import DJ Database",
+                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                CheckFileExists = true,
+                Multiselect = false,
+                FileName = Path.GetFileName(defaultPath),
+                InitialDirectory = Path.GetDirectoryName(defaultPath) ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            };
+
+            return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
+        });
+    }
+
+    private static string? RunStaFileDialog(Func<string?> dialogFactory)
+    {
+        string? result = null;
+        Exception? exception = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                result = dialogFactory();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (exception is not null)
+            throw exception;
+
+        return result;
     }
 
     private static string EscapeCsv(string? value)
