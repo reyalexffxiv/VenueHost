@@ -19,4 +19,4 @@ ReyAlex
 
 ## Version
 
-0.1.0.57 is the current beta bug-fix release of Venue Host.
+0.1.0.58 is the current beta bug-fix release of Venue Host.
