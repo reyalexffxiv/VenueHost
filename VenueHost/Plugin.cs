@@ -356,11 +356,15 @@ public sealed class Plugin : IDalamudPlugin
         if (!this.autoSawUsableDjSinceEnabled || !this.lastAutoDjOrderSeen.HasValue)
             return false;
 
-        if (nextCandidateUtc == DateTime.MaxValue)
-            return true;
-
-        var nextDj = config.GetCurrentServerTimeDj(nextCandidateUtc);
-        return nextDj is not null && nextDj.Order <= this.lastAutoDjOrderSeen.Value;
+        // The event-window scheduler returns DateTime.MaxValue when there is no
+        // future current-DJ or transition shout left. That is the only moment we
+        // should disable auto-shout automatically.
+        //
+        // Do not compare row order here. A future shout can legitimately point
+        // to the same row again when the repeat interval fires during a long DJ
+        // slot, and date-aware schedules can cross midnight without row numbers
+        // being a reliable lifecycle boundary.
+        return nextCandidateUtc == DateTime.MaxValue;
     }
 
     private void DisableAutoShoutAfterLastDj()
