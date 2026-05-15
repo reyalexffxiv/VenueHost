@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
     <PropertyGroup>
-        <Version>0.1.0.55</Version>
+        <Version>0.1.0.56</Version>
         <AssemblyName>VenueHost</AssemblyName>
         <RootNamespace>VenueHost</RootNamespace>
         <PackageProjectUrl>https://github.com/reyalexffxiv/VenueHost</PackageProjectUrl>
@@ -19,4 +19,8 @@
     <ItemGroup>
         <EmbeddedResource Include="Assets\cute_peepo.png" LogicalName="VenueHost.Assets.cute_peepo.png" />
     </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
+  </ItemGroup>
 </Project>

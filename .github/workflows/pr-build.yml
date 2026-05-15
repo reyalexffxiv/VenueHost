@@ -28,10 +28,20 @@ jobs:
       - name: Build
         run: dotnet build .\VenueHost.sln --configuration Release
 
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .\dist | Out-Null
+          Copy-Item .\VenueHost\bin\Release\VenueHost.dll .\dist\ -Force
+          Copy-Item .\VenueHost\bin\Release\*.dll .\dist\ -Force
+          Copy-Item .\VenueHost\VenueHost.json .\dist\ -Force
+          if (Test-Path .\VenueHost\bin\Release\runtimes) { Copy-Item .\VenueHost\bin\Release\runtimes .\dist\runtimes -Recurse -Force }
+          Compress-Archive -Path .\dist\* -DestinationPath .\latest.zip -Force
+
       - name: Store artifacts
         uses: actions/upload-artifact@v4
         with:
           name: VenueHost
-          path: .\VenueHost\bin\Release\VenueHost.dll
+          path: .\latest.zip
           if-no-files-found: error
           retention-days: 7

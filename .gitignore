@@ -21,3 +21,5 @@ latest.zip
 release/
 zipcheck/
 latest.zip
+!dist/
+!dist/*.zip

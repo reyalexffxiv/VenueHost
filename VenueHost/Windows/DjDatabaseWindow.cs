@@ -35,11 +35,6 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     {
         var config = this.plugin.Configuration;
         config.DjDatabase ??= [];
-        var beforeNormalizeCount = config.DjDatabase.Count;
-        config.NormalizeDjDatabase();
-        if (config.DjDatabase.Count != beforeNormalizeCount)
-            config.Save();
-
         ImGui.TextUnformatted("DJ Database");
         ImGui.TextDisabled("Save unique DJ names and stream links here. The DJ Lineup picker uses this list.");
         ImGui.Spacing();
@@ -47,7 +42,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         if (ImGui.Button("Add DJ", new Vector2(100, 28)))
         {
             config.DjDatabase.Add(new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty });
-            config.Save();
+            config.CommitDjDatabaseChanges();
         }
 
         ImGui.SameLine();
@@ -88,16 +83,16 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
-                    this.InputAndSave("##DbName", entry.Name, value => entry.Name = config.GetUniqueDjDatabaseName(value, entry), 120);
+                    this.InputAndSave("##DbName", entry.Name, value => entry.Name = value, 120);
 
                     ImGui.TableNextColumn();
-                    this.InputAndSave("##DbLink", entry.Link, value => entry.Link = value.Trim(), 240);
+                    this.InputAndSave("##DbLink", entry.Link, value => entry.Link = value, 240);
 
                     ImGui.TableNextColumn();
                     if (ImGui.Button("Remove", new Vector2(75, 24)))
                     {
                         config.DjDatabase.RemoveAt(item.Index);
-                        config.Save();
+                        config.CommitDjDatabaseChanges();
                         ImGui.PopID();
                         break;
                     }
@@ -126,7 +121,11 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         if (ImGui.InputText(label, ref editedValue, maxLength))
         {
             setter(editedValue);
-            this.plugin.Configuration.Save();
+        }
+
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            this.plugin.Configuration.CommitDjDatabaseChanges();
         }
     }
 

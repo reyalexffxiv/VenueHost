@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using VenueHost.Models;
+using VenueHost.Services;
 using Dalamud.Configuration;
 using Dalamud.Plugin;
 
@@ -79,13 +81,17 @@ public sealed class Configuration : IPluginConfiguration
     [NonSerialized]
     private IDalamudPluginInterface? pluginInterface;
 
+    [NonSerialized]
+    private DjDatabaseStore? djDatabaseStore;
+
     public void Initialize(IDalamudPluginInterface pluginInterface)
     {
         this.pluginInterface = pluginInterface;
         this.MigrateConfig();
+        this.InitializeDjDatabaseStore(pluginInterface);
         this.EnsureScheduleDefaults();
         this.EnsureEventWindowDefaults();
-        this.NormalizeDjDatabase();
+        this.NormalizeDjDatabase(saveToStore: false);
         this.ClampAutoShoutSettings();
     }
 
@@ -104,7 +110,7 @@ public sealed class Configuration : IPluginConfiguration
         // Version 8 keeps the DJ Database unique by DJ name. This cleans up
         // duplicated beta data that may have been created while testing.
         if (this.Version < 8)
-            this.NormalizeDjDatabase();
+            this.NormalizeDjDatabase(saveToStore: false);
 
         // Version 9 adds softer setup defaults for new schedule rows.
         // Existing schedules are left as-is so beta users do not lose data.
@@ -289,7 +295,7 @@ public sealed class Configuration : IPluginConfiguration
     /// case-insensitively, because the lineup picker should only show one
     /// entry per DJ. When duplicates exist, the first non-empty link wins.
     /// </summary>
-    public void NormalizeDjDatabase()
+    public void NormalizeDjDatabase(bool saveToStore = true)
     {
         this.DjDatabase ??= [];
 
@@ -329,6 +335,9 @@ public sealed class Configuration : IPluginConfiguration
         this.DjDatabase = unique
             .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        if (saveToStore)
+            this.djDatabaseStore?.ReplaceAll(this.DjDatabase);
     }
 
     public string GetUniqueDjDatabaseName(string desiredName, DjDatabaseEntry? currentEntry = null)
@@ -697,6 +706,33 @@ public sealed class Configuration : IPluginConfiguration
     public void Save()
     {
         this.pluginInterface?.SavePluginConfig(this);
+    }
+
+    /// <summary>
+    /// Commits DJ Database edits after an edit operation is finished.
+    /// Normalizing on every keystroke can reorder active ImGui rows and make
+    /// text appear to jump into other fields, so the database window calls this
+    /// after text inputs are deactivated instead.
+    /// </summary>
+    public void CommitDjDatabaseChanges()
+    {
+        this.NormalizeDjDatabase(saveToStore: true);
+        this.Save();
+    }
+
+    private void InitializeDjDatabaseStore(IDalamudPluginInterface pluginInterface)
+    {
+        var dbPath = Path.Combine(pluginInterface.ConfigDirectory.FullName, "dj_database.sqlite3");
+        this.djDatabaseStore = new DjDatabaseStore(dbPath);
+
+        if (this.djDatabaseStore.IsEmpty())
+        {
+            // First run after upgrading from the JSON-backed database.
+            // Seed SQLite from the existing config so testers keep their saved DJs.
+            this.djDatabaseStore.ReplaceAll(this.DjDatabase);
+        }
+
+        this.DjDatabase = this.djDatabaseStore.Load().ToList();
     }
 
     private static bool RemoveManualWaitLines(ref string macroText)
