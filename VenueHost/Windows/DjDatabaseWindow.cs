@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -14,6 +15,7 @@ namespace VenueHost.Windows;
 public sealed class DjDatabaseWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
+    private readonly Dictionary<string, (string Name, string Link)> cleanSnapshots = new();
     private string searchText = string.Empty;
 
     public DjDatabaseWindow(Plugin plugin)
@@ -41,8 +43,12 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
         if (ImGui.Button("Add DJ", new Vector2(100, 28)))
         {
-            config.DjDatabase.Add(new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty });
-            config.CommitDjDatabaseChanges();
+            var entry = new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty };
+
+            // Keep new rows at the top while staff fill them in. The row is sorted
+            // into the permanent database order only after its Save button is used.
+            config.DjDatabase.Insert(0, entry);
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
         }
 
         ImGui.SameLine();
@@ -56,10 +62,11 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         ImGui.Spacing();
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
-        if (ImGui.BeginTable("VenueHostDjDatabaseTable", 3, tableFlags))
+        if (ImGui.BeginTable("VenueHostDjDatabaseTable", 4, tableFlags))
         {
             ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1.2f);
             ImGui.TableSetupColumn("Link", ImGuiTableColumnFlags.WidthStretch, 2.4f);
+            ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 80f);
             ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 90f);
             ImGui.TableHeadersRow();
 
@@ -79,20 +86,41 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                 foreach (var item in visibleEntries)
                 {
                     var entry = item.Entry;
+                    this.EnsureCleanSnapshot(entry);
                     ImGui.PushID($"DjDatabaseRow{entry.RuntimeId}");
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
-                    this.InputAndSave("##DbName", entry.Name, value => entry.Name = value, 120);
+                    this.InputWithoutAutoSave("##DbName", entry.Name, value => entry.Name = value, 120);
 
                     ImGui.TableNextColumn();
-                    this.InputAndSave("##DbLink", entry.Link, value => entry.Link = value, 240);
+                    this.InputWithoutAutoSave("##DbLink", entry.Link, value => entry.Link = value, 240);
+
+                    ImGui.TableNextColumn();
+                    var dirty = this.IsDirty(entry);
+                    if (!dirty)
+                    {
+                        ImGui.BeginDisabled();
+                    }
+
+                    if (ImGui.Button("Save", new Vector2(72, 24)))
+                    {
+                        this.SaveDatabaseChanges();
+                        ImGui.PopID();
+                        break;
+                    }
+
+                    if (!dirty)
+                    {
+                        ImGui.EndDisabled();
+                    }
 
                     ImGui.TableNextColumn();
                     if (ImGui.Button("Remove", new Vector2(75, 24)))
                     {
                         config.DjDatabase.RemoveAt(item.Index);
-                        config.CommitDjDatabaseChanges();
+                        this.cleanSnapshots.Remove(entry.RuntimeId);
+                        this.SaveDatabaseChanges();
                         ImGui.PopID();
                         break;
                     }
@@ -114,7 +142,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                (entry.Link?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
-    private void InputAndSave(string label, string value, Action<string> setter, int maxLength)
+    private void InputWithoutAutoSave(string label, string value, Action<string> setter, int maxLength)
     {
         var editedValue = value ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
@@ -122,11 +150,37 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         {
             setter(editedValue);
         }
+    }
 
-        if (ImGui.IsItemDeactivatedAfterEdit())
+    private void EnsureCleanSnapshot(DjDatabaseEntry entry)
+    {
+        if (!this.cleanSnapshots.ContainsKey(entry.RuntimeId))
         {
-            this.plugin.Configuration.CommitDjDatabaseChanges();
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
         }
+    }
+
+    private bool IsDirty(DjDatabaseEntry entry)
+    {
+        this.EnsureCleanSnapshot(entry);
+        var snapshot = this.cleanSnapshots[entry.RuntimeId];
+        return !string.Equals(entry.Name, snapshot.Name, StringComparison.Ordinal)
+            || !string.Equals(entry.Link, snapshot.Link, StringComparison.Ordinal);
+    }
+
+    private void SyncCleanSnapshots()
+    {
+        this.cleanSnapshots.Clear();
+        foreach (var entry in this.plugin.Configuration.DjDatabase)
+        {
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
+        }
+    }
+
+    private void SaveDatabaseChanges()
+    {
+        this.plugin.Configuration.CommitDjDatabaseChanges();
+        this.SyncCleanSnapshots();
     }
 
 }

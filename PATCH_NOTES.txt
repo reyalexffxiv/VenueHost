@@ -1,14 +1,21 @@
-## v0.1.0.58 - Packaging Cleanup
+## v0.1.0.59 - DJ Database Save Flow
+
+- Added per-row Save buttons in the DJ Database.
+- New DJ rows stay at the top while editing.
+- DJ Database sorting now happens after saving instead of while typing.
+- Kept SQLite database storage so saved DJ entries survive plugin updates.
+
+## v0.1.0.59 - Packaging Cleanup
 
 - Bumped version for Dalamud update detection.
 - Added a clean packaging script that creates `dist/VenueHost-latest.zip` without nested build folders or duplicate zips.
 - Keeps the SQLite DJ database in Dalamud plugin config storage, so user DJ databases survive plugin updates.
 
-## v0.1.0.57 - DJ Database Stability
+## v0.1.0.59 - DJ Database Stability
 
 - Stabilized DJ Database editing so sorted rows do not overwrite other DJ entries while typing.
 - Moved DJ Database storage to SQLite.
 
-## v0.1.0.55 - First Beta Release
+## v0.1.0.59 - First Beta Release
 
 - First beta release.
