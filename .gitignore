@@ -1,4 +1,19 @@
-.vs/
-obj/
+# Build output
 bin/
+obj/
+
+# User/local files
+.vs/
+.idea/
 *.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Archives / release artifacts
+*.zip
+latest.zip
+
+# Logs and temp files
+*.log
+*.tmp

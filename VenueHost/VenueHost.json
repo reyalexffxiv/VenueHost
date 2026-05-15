@@ -1,0 +1,16 @@
+{
+    "Author": "ReyAlex",
+    "Name": "Venue Host",
+    "Punchline": "DJ shout and macro assistant for FFXIV venues.",
+    "Description": "A lightweight venue macro assistant for DJ announcements, set transitions, giveaway reminders, and reusable shout macros.",
+    "ApplicableVersion": "any",
+    "Tags": [
+        "venue",
+        "dj",
+        "shout",
+        "macro",
+        "events"
+    ],
+    "DalamudApiLevel": 15,
+    "RepoUrl": "https://github.com/reyalexffxiv/VenueHost"
+}

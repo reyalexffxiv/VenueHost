@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+    <PropertyGroup>
+        <Version>0.1.0.55</Version>
+        <AssemblyName>VenueHost</AssemblyName>
+        <RootNamespace>VenueHost</RootNamespace>
+        <PackageProjectUrl>https://github.com/reyalexffxiv/VenueHost</PackageProjectUrl>
+        <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+        <IsPackable>false</IsPackable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Content Include="VenueHost.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Assets\cute_peepo.png" LogicalName="VenueHost.Assets.cute_peepo.png" />
+    </ItemGroup>
+</Project>
