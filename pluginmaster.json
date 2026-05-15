@@ -1,10 +1,10 @@
-﻿[
+[
   {
     "Author": "ReyAlex",
     "Name": "Venue Host",
     "InternalName": "VenueHost",
     "AssemblyVersion": "0.1.0.55",
-    "Description": "A lightweight venue macro assistant for DJ announcements, set transitions, giveaway reminders, and reusable shout macros.",
+    "Description": "Lightweight plugin to help with Venue Hosting",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/reyalexffxiv/VenueHost",
     "DalamudApiLevel": 15,
@@ -20,3 +20,4 @@
     "DownloadLinkTesting": "https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/dist/VenueHost-latest.zip"
   }
 ]
+

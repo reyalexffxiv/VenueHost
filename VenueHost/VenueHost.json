@@ -4,7 +4,7 @@
   "InternalName": "VenueHost",
   "AssemblyVersion": "0.1.0.55",
   "Punchline": "DJ shout and macro assistant for FFXIV venues.",
-  "Description": "A lightweight venue macro assistant for DJ announcements, set transitions, giveaway reminders, and reusable shout macros.",
+  "Description": "Lightweight plugin to help with Venue Hosting",
   "ApplicableVersion": "any",
   "Tags": [
     "venue",
@@ -16,3 +16,4 @@
   "DalamudApiLevel": 15,
   "RepoUrl": "https://github.com/reyalexffxiv/VenueHost"
 }
+
