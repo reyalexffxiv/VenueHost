@@ -265,17 +265,23 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>
     /// Draws the editable stream link cell with a compact browser button.
     ///
-    /// The input remains a normal editable field, so hosts can still paste or tweak links
-    /// directly. The adjacent button opens valid http/https links for quick stream checks.
+    /// The input remains editable, while the adjacent Open button gives hosts a fast
+    /// way to verify a DJ stream link. This method intentionally avoids InputEntryAndSave,
+    /// because that helper consumes the full available column width.
     /// </summary>
     private void DrawLinkEditor(DjScheduleEntry entry, int index)
     {
-        var openButtonWidth = 52f;
+        var openButtonWidth = 58f;
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var inputWidth = Math.Max(80f, ImGui.GetContentRegionAvail().X - openButtonWidth - spacing);
 
+        var editedLink = entry.DJLink ?? string.Empty;
         ImGui.SetNextItemWidth(inputWidth);
-        this.InputEntryAndSave($"##DJLink{index}", entry.DJLink, value => entry.DJLink = value);
+        if (ImGui.InputText($"##DJLink{index}", ref editedLink, 240))
+        {
+            entry.DJLink = editedLink;
+            this.plugin.Configuration.Save();
+        }
 
         ImGui.SameLine();
 
@@ -285,10 +291,13 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.BeginDisabled();
         }
 
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.34f, 0.60f, 1.00f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.44f, 0.74f, 1.00f));
         if (ImGui.Button($"Open##DJLinkOpen{index}", new Vector2(openButtonWidth, 0f)))
         {
             OpenExternalLink(entry.DJLink);
         }
+        ImGui.PopStyleColor(2);
 
         if (!canOpen)
         {
