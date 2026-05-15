@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build .\VenueHost.sln -c Release
+
+      - name: Package latest.zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .\release | Out-Null
+          Copy-Item .\VenueHost\bin\Release\VenueHost.dll .\release\
+          Copy-Item .\VenueHost\VenueHost.json .\release\
+          Compress-Archive -Path .\release\* -DestinationPath .\latest.zip -Force
+
+      - name: Create or update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag .\latest.zip --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "First beta release." --prerelease
+          } else {
+            gh release upload $tag .\latest.zip --repo $env:GITHUB_REPOSITORY --clobber
+          }
