@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.1.0.59"
+    [string]$Version = "0.1.0.60"
 )
 
 $ErrorActionPreference = "Stop"

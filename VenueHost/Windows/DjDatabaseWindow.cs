@@ -16,6 +16,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
     private readonly Dictionary<string, (string Name, string Link)> cleanSnapshots = new();
+    private string? pendingRemoveId;
+    private string pendingRemoveName = string.Empty;
     private string searchText = string.Empty;
 
     public DjDatabaseWindow(Plugin plugin)
@@ -41,7 +43,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         ImGui.TextDisabled("Save unique DJ names and stream links here. The DJ Lineup picker uses this list.");
         ImGui.Spacing();
 
-        if (ImGui.Button("Add DJ", new Vector2(100, 28)))
+        if (this.ColoredButton("Add DJ", ButtonTone.Green, new Vector2(100, 28)))
         {
             var entry = new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty };
 
@@ -66,13 +68,12 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         {
             ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1.2f);
             ImGui.TableSetupColumn("Link", ImGuiTableColumnFlags.WidthStretch, 2.4f);
-            ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 80f);
-            ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 90f);
+            ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 90f);
+            ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 100f);
             ImGui.TableHeadersRow();
 
             var visibleEntries = config.DjDatabase
-                .Select((entry, index) => new { Entry = entry, Index = index })
-                .Where(item => MatchesSearch(item.Entry, this.searchText))
+                .Where(entry => MatchesSearch(entry, this.searchText))
                 .ToList();
 
             if (visibleEntries.Count == 0)
@@ -83,9 +84,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             }
             else
             {
-                foreach (var item in visibleEntries)
+                foreach (var entry in visibleEntries)
                 {
-                    var entry = item.Entry;
                     this.EnsureCleanSnapshot(entry);
                     ImGui.PushID($"DjDatabaseRow{entry.RuntimeId}");
                     ImGui.TableNextRow();
@@ -103,7 +103,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                         ImGui.BeginDisabled();
                     }
 
-                    if (ImGui.Button("Save", new Vector2(72, 24)))
+                    if (this.ColoredButton("Save", ButtonTone.Blue, new Vector2(78, 24)))
                     {
                         this.SaveDatabaseChanges();
                         ImGui.PopID();
@@ -116,13 +116,9 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                     }
 
                     ImGui.TableNextColumn();
-                    if (ImGui.Button("Remove", new Vector2(75, 24)))
+                    if (this.ColoredButton("Remove", ButtonTone.Red, new Vector2(82, 24)))
                     {
-                        config.DjDatabase.RemoveAt(item.Index);
-                        this.cleanSnapshots.Remove(entry.RuntimeId);
-                        this.SaveDatabaseChanges();
-                        ImGui.PopID();
-                        break;
+                        this.OpenRemoveConfirmation(entry);
                     }
 
                     ImGui.PopID();
@@ -131,6 +127,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
             ImGui.EndTable();
         }
+
+        this.DrawRemoveConfirmationPopup();
     }
 
     private static bool MatchesSearch(DjDatabaseEntry entry, string searchText)
@@ -168,6 +166,79 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             || !string.Equals(entry.Link, snapshot.Link, StringComparison.Ordinal);
     }
 
+    private void OpenRemoveConfirmation(DjDatabaseEntry entry)
+    {
+        this.pendingRemoveId = entry.RuntimeId;
+        this.pendingRemoveName = string.IsNullOrWhiteSpace(entry.Name) ? "this DJ" : entry.Name.Trim();
+        ImGui.OpenPopup("Remove DJ?##VenueHostDjDbRemoveConfirm");
+    }
+
+    private void DrawRemoveConfirmationPopup()
+    {
+        if (this.pendingRemoveId is not null)
+        {
+            var windowPos = ImGui.GetWindowPos();
+            var windowSize = ImGui.GetWindowSize();
+            var popupSize = new Vector2(390, 145);
+            ImGui.SetNextWindowSize(popupSize, ImGuiCond.Appearing);
+            ImGui.SetNextWindowPos(windowPos + (windowSize - popupSize) * 0.5f, ImGuiCond.Appearing);
+        }
+
+        var popupOpen = true;
+        if (!ImGui.BeginPopupModal("Remove DJ?##VenueHostDjDbRemoveConfirm", ref popupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
+        {
+            return;
+        }
+
+        ImGui.TextWrapped($"Remove {this.pendingRemoveName} from the DJ Database?");
+        ImGui.TextDisabled("Existing lineup rows using this DJ will stay unchanged.");
+        ImGui.Spacing();
+
+        if (this.ColoredButton("Remove##ConfirmRemoveDj", ButtonTone.Red, new Vector2(120, 28)))
+        {
+            if (this.pendingRemoveId is { } removeId)
+            {
+                this.RemoveEntry(removeId);
+            }
+
+            this.ClearPendingRemove();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel##CancelRemoveDj", new Vector2(120, 28)))
+        {
+            this.ClearPendingRemove();
+            ImGui.CloseCurrentPopup();
+        }
+
+        if (!popupOpen)
+        {
+            this.ClearPendingRemove();
+        }
+
+        ImGui.EndPopup();
+    }
+
+    private void RemoveEntry(string runtimeId)
+    {
+        var entry = this.plugin.Configuration.DjDatabase.FirstOrDefault(databaseEntry => databaseEntry.RuntimeId == runtimeId);
+        if (entry is null)
+        {
+            return;
+        }
+
+        this.plugin.Configuration.DjDatabase.Remove(entry);
+        this.cleanSnapshots.Remove(entry.RuntimeId);
+        this.SaveDatabaseChanges();
+    }
+
+    private void ClearPendingRemove()
+    {
+        this.pendingRemoveId = null;
+        this.pendingRemoveName = string.Empty;
+    }
+
     private void SyncCleanSnapshots()
     {
         this.cleanSnapshots.Clear();
@@ -183,4 +254,28 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         this.SyncCleanSnapshots();
     }
 
+    private bool ColoredButton(string label, ButtonTone tone, Vector2 size)
+    {
+        var (normal, hovered, active) = tone switch
+        {
+            ButtonTone.Green => (new Vector4(0.10f, 0.46f, 0.24f, 1.00f), new Vector4(0.14f, 0.56f, 0.30f, 1.00f), new Vector4(0.08f, 0.36f, 0.19f, 1.00f)),
+            ButtonTone.Red => (new Vector4(0.56f, 0.14f, 0.14f, 1.00f), new Vector4(0.68f, 0.18f, 0.18f, 1.00f), new Vector4(0.45f, 0.10f, 0.10f, 1.00f)),
+            ButtonTone.Blue => (new Vector4(0.12f, 0.34f, 0.61f, 1.00f), new Vector4(0.16f, 0.42f, 0.73f, 1.00f), new Vector4(0.09f, 0.27f, 0.50f, 1.00f)),
+            _ => (new Vector4(0.32f, 0.32f, 0.32f, 1.00f), new Vector4(0.39f, 0.39f, 0.39f, 1.00f), new Vector4(0.25f, 0.25f, 0.25f, 1.00f)),
+        };
+
+        ImGui.PushStyleColor(ImGuiCol.Button, normal);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, hovered);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, active);
+        var clicked = ImGui.Button(label, size);
+        ImGui.PopStyleColor(3);
+        return clicked;
+    }
+
+    private enum ButtonTone
+    {
+        Green,
+        Red,
+        Blue,
+    }
 }

@@ -18,7 +18,7 @@ Get-Content .\zipcheck\VenueHost.json
 # Commit and push.
 git pull --rebase origin master
 git add .
-git commit -m "Release v0.1.0.59 packaging cleanup"
+git commit -m "Release v0.1.0.60 packaging cleanup"
 git push
 ```
 
