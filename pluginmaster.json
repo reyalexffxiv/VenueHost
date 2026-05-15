@@ -15,8 +15,8 @@
       "macro",
       "events"
     ],
-    "DownloadLinkInstall": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
-    "DownloadLinkTesting": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/dist/VenueHost-latest.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/dist/VenueHost-latest.zip",
+    "DownloadLinkTesting": "https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/dist/VenueHost-latest.zip"
   }
 ]
