@@ -79,7 +79,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                 foreach (var item in visibleEntries)
                 {
                     var entry = item.Entry;
-                    ImGui.PushID($"DjDatabaseRow{item.Index}");
+                    ImGui.PushID($"DjDatabaseRow{entry.RuntimeId}");
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();

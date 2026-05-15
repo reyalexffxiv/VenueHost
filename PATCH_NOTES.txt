@@ -1,9 +1,4 @@
-## v0.1.0.56 - Bug Fixes
+## v0.1.0.57 - DJ Database Edit Stability Fix
 
-- Fixed DJ Database editing so rows no longer inherit text from other rows while typing.
-- Moved the DJ Database to SQLite-backed storage in the plugin config folder.
-- Existing DJ Database entries migrate automatically from the old configuration on first launch.
-
-## v0.1.0.55 - First Beta Release
-
-- First beta release.
+- Fixed DJ Database text edits jumping between rows after automatic sorting.
+- Kept the SQLite-backed DJ Database from v0.1.0.56 so existing saved DJ entries survive plugin updates.

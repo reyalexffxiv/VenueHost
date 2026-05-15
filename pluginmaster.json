@@ -3,8 +3,8 @@
     "Author": "ReyAlex",
     "Name": "Venue Host",
     "InternalName": "VenueHost",
-    "AssemblyVersion": "0.1.0.56",
-    "Description": "Lightweight plugin to help with Venue Hosting",
+    "AssemblyVersion": "0.1.0.57",
+    "Description": "Lightweight plugin to help with Venue Hosting.",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/reyalexffxiv/VenueHost",
     "DalamudApiLevel": 15,
@@ -20,4 +20,3 @@
     "DownloadLinkTesting": "https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/dist/VenueHost-latest.zip"
   }
 ]
-

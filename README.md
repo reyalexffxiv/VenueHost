@@ -1,6 +1,6 @@
 # Venue Host
 
-Venue Host is a lightweight Dalamud plugin for FFXIV venues. It helps venue staff manage DJ lineup announcements, set transition messages, giveaway reminders, and reusable venue macros.
+Venue Host is a lightweight plugin to help with Venue Hosting.
 
 ## Current beta features
 
@@ -19,4 +19,4 @@ ReyAlex
 
 ## Version
 
-0.1.0.56 is the current beta bug-fix release of Venue Host.
+0.1.0.57 is the current beta bug-fix release of Venue Host.
