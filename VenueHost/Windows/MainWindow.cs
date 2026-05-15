@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -235,7 +236,7 @@ public sealed class MainWindow : Window, IDisposable
             this.DjPickerAndSave(entry);
 
             ImGui.TableNextColumn();
-            this.InputEntryAndSave("##DJLink", entry.DJLink, value => entry.DJLink = value);
+            this.DrawLinkEditor(entry, i);
 
             ImGui.TableNextColumn();
             this.TimePickerAndSave("Start", entry.StartTime, value => entry.StartTime = value);
@@ -258,6 +259,66 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         ImGui.EndTable();
+    }
+
+
+    /// <summary>
+    /// Draws the editable stream link cell with a compact browser button.
+    ///
+    /// The input remains a normal editable field, so hosts can still paste or tweak links
+    /// directly. The adjacent button opens valid http/https links for quick stream checks.
+    /// </summary>
+    private void DrawLinkEditor(DjScheduleEntry entry, int index)
+    {
+        var openButtonWidth = 52f;
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var inputWidth = Math.Max(80f, ImGui.GetContentRegionAvail().X - openButtonWidth - spacing);
+
+        ImGui.SetNextItemWidth(inputWidth);
+        this.InputEntryAndSave($"##DJLink{index}", entry.DJLink, value => entry.DJLink = value);
+
+        ImGui.SameLine();
+
+        var canOpen = IsHttpLink(entry.DJLink);
+        if (!canOpen)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button($"Open##DJLinkOpen{index}", new Vector2(openButtonWidth, 0f)))
+        {
+            OpenExternalLink(entry.DJLink);
+        }
+
+        if (!canOpen)
+        {
+            ImGui.EndDisabled();
+        }
+
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+        {
+            ImGui.SetTooltip(canOpen ? "Open stream link in browser." : "Enter a full http:// or https:// link first.");
+        }
+    }
+
+    private static bool IsHttpLink(string? link)
+    {
+        return Uri.TryCreate(link, UriKind.Absolute, out var uri)
+               && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    }
+
+    private static void OpenExternalLink(string link)
+    {
+        if (!IsHttpLink(link))
+        {
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = link,
+            UseShellExecute = true,
+        });
     }
 
     private void DrawScheduleButtons(Configuration config)

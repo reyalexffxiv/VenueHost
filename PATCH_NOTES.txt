@@ -1,3 +1,7 @@
+## v0.1.0.61 - Lineup Link Open Button
+
+- Added an Open button to DJ lineup link cells so hosts can quickly open valid http/https stream links from the main window.
+
 ## v0.1.0.60 - DJ Database Button Polish
 
 - Added colored Add, Save, and Remove buttons in the DJ Database window.
