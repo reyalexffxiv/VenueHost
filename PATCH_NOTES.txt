@@ -1,6 +1,6 @@
-VenueHost v0.1.0.65
+Venue Host v0.1.0.66
 
-- Keeps lineup stream links as clean clickable text instead of an Open button.
-- Keeps permanent DJ link edits in the DJ Database.
-- Fixes nullable OpenExternalLink signature.
-- Fixes package script so e_sqlite3.dll is always included from the build output root when SQLite places it there.
+- Added active lineup sidecar persistence under plugin config folder: active_lineup.json.
+- Added DJ Database CSV import/export using dj_database.csv in the plugin config folder.
+- Kept v65 clickable lineup links and SQLite native packaging fix.
+- Code review pass: added comments around persistence paths and kept UI actions explicit/safe for live hosting.

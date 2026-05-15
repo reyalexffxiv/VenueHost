@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Text;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -19,6 +21,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     private string? pendingRemoveId;
     private string pendingRemoveName = string.Empty;
     private string searchText = string.Empty;
+    private string csvStatusText = string.Empty;
 
     public DjDatabaseWindow(Plugin plugin)
         : base("DJ Database###VenueHostDjDatabase")
@@ -54,7 +57,20 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        ImGui.TextDisabled("DJ names are kept unique automatically.");
+        if (this.ColoredButton("Export CSV", ButtonTone.Blue, new Vector2(105, 28)))
+            this.ExportCsv();
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Import CSV", ButtonTone.Blue, new Vector2(105, 28)))
+            this.ImportCsv();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("CSV uses the plugin config folder.");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(this.GetCsvPath());
+
+        if (!string.IsNullOrWhiteSpace(this.csvStatusText))
+            ImGui.TextDisabled(this.csvStatusText);
 
         ImGui.Spacing();
         ImGui.TextUnformatted("Search DJ:");
@@ -129,6 +145,123 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         }
 
         this.DrawRemoveConfirmationPopup();
+    }
+
+
+    private string GetCsvPath()
+        => Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "dj_database.csv");
+
+    private void ExportCsv()
+    {
+        try
+        {
+            var path = this.GetCsvPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+
+            var builder = new StringBuilder();
+            builder.AppendLine("Name,Link");
+            foreach (var entry in this.plugin.Configuration.DjDatabase.OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase))
+                builder.AppendLine($"{EscapeCsv(entry.Name)},{EscapeCsv(entry.Link)}");
+
+            File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
+            this.csvStatusText = $"Exported {this.plugin.Configuration.DjDatabase.Count} DJs to {Path.GetFileName(path)}.";
+        }
+        catch (Exception ex)
+        {
+            this.csvStatusText = $"Export failed: {ex.Message}";
+        }
+    }
+
+    private void ImportCsv()
+    {
+        try
+        {
+            var path = this.GetCsvPath();
+            if (!File.Exists(path))
+            {
+                this.csvStatusText = $"Place dj_database.csv in {Plugin.PluginInterface.ConfigDirectory.FullName}, then import.";
+                return;
+            }
+
+            var imported = 0;
+            foreach (var row in File.ReadAllLines(path).Skip(1))
+            {
+                if (string.IsNullOrWhiteSpace(row))
+                    continue;
+
+                var columns = ParseCsvLine(row);
+                if (columns.Count == 0 || string.IsNullOrWhiteSpace(columns[0]))
+                    continue;
+
+                var name = columns[0].Trim();
+                var link = columns.Count > 1 ? columns[1].Trim() : string.Empty;
+                var existing = this.plugin.Configuration.DjDatabase.FirstOrDefault(entry =>
+                    string.Equals((entry.Name ?? string.Empty).Trim(), name, StringComparison.OrdinalIgnoreCase));
+
+                if (existing is null)
+                {
+                    this.plugin.Configuration.DjDatabase.Add(new DjDatabaseEntry { Name = name, Link = link });
+                }
+                else
+                {
+                    existing.Name = name;
+                    existing.Link = link;
+                }
+
+                imported++;
+            }
+
+            this.SaveDatabaseChanges();
+            this.csvStatusText = $"Imported/updated {imported} DJs from {Path.GetFileName(path)}.";
+        }
+        catch (Exception ex)
+        {
+            this.csvStatusText = $"Import failed: {ex.Message}";
+        }
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        value ??= string.Empty;
+        return value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r')
+            ? $"\"{value.Replace("\"", "\"\"")}\""
+            : value;
+    }
+
+    private static List<string> ParseCsvLine(string line)
+    {
+        var values = new List<string>();
+        var builder = new StringBuilder();
+        var inQuotes = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var current = line[i];
+            if (current == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    builder.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (current == ',' && !inQuotes)
+            {
+                values.Add(builder.ToString());
+                builder.Clear();
+            }
+            else
+            {
+                builder.Append(current);
+            }
+        }
+
+        values.Add(builder.ToString());
+        return values;
     }
 
     private static bool MatchesSearch(DjDatabaseEntry entry, string searchText)

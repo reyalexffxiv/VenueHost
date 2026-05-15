@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 12;
+    public const int CurrentConfigVersion = 13;
 
     public const string DefaultCurrentDjMacro =
         "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -84,11 +84,15 @@ public sealed class Configuration : IPluginConfiguration
     [NonSerialized]
     private DjDatabaseStore? djDatabaseStore;
 
+    [NonSerialized]
+    private LineupStore? lineupStore;
+
     public void Initialize(IDalamudPluginInterface pluginInterface)
     {
         this.pluginInterface = pluginInterface;
         this.MigrateConfig();
         this.InitializeDjDatabaseStore(pluginInterface);
+        this.InitializeLineupStore(pluginInterface);
         this.EnsureScheduleDefaults();
         this.EnsureEventWindowDefaults();
         this.NormalizeDjDatabase(saveToStore: false);
@@ -125,6 +129,9 @@ public sealed class Configuration : IPluginConfiguration
         // do not depend on guessing from HH:mm-only DJ rows.
         if (this.Version < 12)
             this.EnsureEventWindowDefaults();
+
+        // Version 13 adds a sidecar lineup snapshot so a live event schedule has
+        // an extra recovery path across plugin updates.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.
@@ -706,6 +713,7 @@ public sealed class Configuration : IPluginConfiguration
     public void Save()
     {
         this.pluginInterface?.SavePluginConfig(this);
+        this.lineupStore?.Save(this);
     }
 
     /// <summary>
@@ -718,6 +726,29 @@ public sealed class Configuration : IPluginConfiguration
     {
         this.NormalizeDjDatabase(saveToStore: true);
         this.Save();
+    }
+
+
+    private void InitializeLineupStore(IDalamudPluginInterface pluginInterface)
+    {
+        var snapshotPath = Path.Combine(pluginInterface.ConfigDirectory.FullName, "active_lineup.json");
+        this.lineupStore = new LineupStore(snapshotPath);
+
+        if (this.DjSchedule.Count == 0 && this.lineupStore.TryLoad(out var snapshot) && snapshot.DjSchedule.Count > 0)
+        {
+            this.DjSchedule = snapshot.DjSchedule;
+            this.SelectedDjOrder = snapshot.SelectedDjOrder;
+            this.VenueName = snapshot.VenueName;
+            this.EventName = snapshot.EventName;
+            this.EventStartDate = snapshot.EventStartDate;
+            this.EventStartTime = snapshot.EventStartTime;
+            this.EventEndDate = snapshot.EventEndDate;
+            this.EventEndTime = snapshot.EventEndTime;
+            this.GiveawayText = snapshot.GiveawayText;
+            this.GiveawayCommand = snapshot.GiveawayCommand;
+            this.GiveawayEnabled = snapshot.GiveawayEnabled;
+            this.GiveawayCommandEnabled = snapshot.GiveawayCommandEnabled;
+        }
     }
 
     private void InitializeDjDatabaseStore(IDalamudPluginInterface pluginInterface)
