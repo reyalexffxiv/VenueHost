@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.1.0.62"
+    [string]$Version = "0.1.0.65"
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,24 +27,11 @@ $files = @(
     Get-ChildItem $buildRoot -Recurse -Filter "SQLitePCLRaw.core.dll" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     Get-ChildItem $buildRoot -Recurse -Filter "SQLitePCLRaw.batteries_v2.dll" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     Get-ChildItem $buildRoot -Recurse -Filter "SQLitePCLRaw.provider.e_sqlite3.dll" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Get-ChildItem $buildRoot -Recurse -Filter "e_sqlite3.dll" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 ) | Where-Object { $null -ne $_ }
 
 foreach ($file in $files) {
     Copy-Item $file.FullName $stage -Force
-}
-
-# Keep the Windows x64 SQLite native dependency. Some builds place it directly
-# beside VenueHost.dll, while others keep it under runtimes\win-x64\native.
-$native = Get-ChildItem $buildRoot -Recurse -Filter "e_sqlite3.dll" |
-    Where-Object {
-        $_.FullName -match "runtimes[\\/]win-x64[\\/]native" -or
-        $_.FullName -match "Release[\\/]win-x64[\\/]e_sqlite3\.dll$"
-    } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-
-if ($native) {
-    Copy-Item $native.FullName $stage -Force
 }
 
 $zipPath = Join-Path $dist "VenueHost-latest.zip"

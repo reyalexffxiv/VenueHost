@@ -236,7 +236,7 @@ public sealed class MainWindow : Window, IDisposable
             this.DjPickerAndSave(entry);
 
             ImGui.TableNextColumn();
-            this.DrawLinkEditor(entry, i);
+            this.DrawLinkCell(entry);
 
             ImGui.TableNextColumn();
             this.TimePickerAndSave("Start", entry.StartTime, value => entry.StartTime = value);
@@ -263,51 +263,79 @@ public sealed class MainWindow : Window, IDisposable
 
 
     /// <summary>
-    /// Draws the editable stream link cell with a compact browser button.
+    /// Draws the stream link as clean clickable text in the lineup table.
     ///
-    /// The input remains editable, while the adjacent Open button gives hosts a fast
-    /// way to verify a DJ stream link. This method intentionally avoids InputEntryAndSave,
-    /// because that helper consumes the full available column width.
+    /// Permanent DJ links should be edited from the DJ Database, keeping the main
+    /// event lineup focused and visually tidy.
     /// </summary>
-    private void DrawLinkEditor(DjScheduleEntry entry, int index)
+    private void DrawLinkCell(DjScheduleEntry entry)
     {
-        var openButtonWidth = 58f;
-        var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var inputWidth = Math.Max(80f, ImGui.GetContentRegionAvail().X - openButtonWidth - spacing);
+        var link = (entry.DJLink ?? string.Empty).Trim();
 
-        var editedLink = entry.DJLink ?? string.Empty;
-        ImGui.SetNextItemWidth(inputWidth);
-        if (ImGui.InputText($"##DJLink{index}", ref editedLink, 240))
+        if (string.IsNullOrWhiteSpace(link))
         {
-            entry.DJLink = editedLink;
-            this.plugin.Configuration.Save();
+            ImGui.TextDisabled("No link");
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("No stream link set for this DJ.");
+            }
+
+            return;
         }
 
-        ImGui.SameLine();
-
-        var canOpen = IsHttpLink(entry.DJLink);
-        if (!canOpen)
-        {
-            ImGui.BeginDisabled();
-        }
-
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.34f, 0.60f, 1.00f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.18f, 0.44f, 0.74f, 1.00f));
-        if (ImGui.Button($"Open##DJLinkOpen{index}", new Vector2(openButtonWidth, 0f)))
-        {
-            OpenExternalLink(entry.DJLink);
-        }
-        ImGui.PopStyleColor(2);
+        var canOpen = IsHttpLink(link);
+        var displayLink = TrimTextToWidth(link, ImGui.GetContentRegionAvail().X);
 
         if (!canOpen)
         {
-            ImGui.EndDisabled();
+            ImGui.TextDisabled(displayLink);
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("Link must start with http:// or https://.");
+            }
+
+            return;
         }
 
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.35f, 0.65f, 1.00f, 1.00f));
+        ImGui.TextUnformatted(displayLink);
+        ImGui.PopStyleColor();
+
+        if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip(canOpen ? "Open stream link in browser." : "Enter a full http:// or https:// link first.");
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            ImGui.SetTooltip($"Open stream link:\n{link}");
         }
+
+        if (ImGui.IsItemClicked())
+        {
+            OpenExternalLink(link);
+        }
+    }
+
+    private static string TrimTextToWidth(string text, float maxWidth)
+    {
+        const string ellipsis = "...";
+
+        if (string.IsNullOrEmpty(text) || maxWidth <= 0f)
+        {
+            return text;
+        }
+
+        if (ImGui.CalcTextSize(text).X <= maxWidth)
+        {
+            return text;
+        }
+
+        var availableWidth = Math.Max(0f, maxWidth - ImGui.CalcTextSize(ellipsis).X);
+        var trimmed = text;
+
+        while (trimmed.Length > 0 && ImGui.CalcTextSize(trimmed).X > availableWidth)
+        {
+            trimmed = trimmed[..^1];
+        }
+
+        return trimmed + ellipsis;
     }
 
     private static bool IsHttpLink(string? link)
@@ -316,7 +344,7 @@ public sealed class MainWindow : Window, IDisposable
                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
     }
 
-    private static void OpenExternalLink(string link)
+    private static void OpenExternalLink(string? link)
     {
         if (!IsHttpLink(link))
         {
