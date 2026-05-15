@@ -17,3 +17,7 @@ latest.zip
 # Logs and temp files
 *.log
 *.tmp
+
+release/
+zipcheck/
+latest.zip
