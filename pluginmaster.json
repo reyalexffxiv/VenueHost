@@ -1,22 +1,25 @@
-[
-    {
-        "Author": "ReyAlex",
-        "Name": "Venue Host",
-        "InternalName": "VenueHost",
-        "AssemblyVersion": "0.1.0.55",
-        "Description": "A lightweight venue macro assistant for DJ announcements, set transitions, giveaway reminders, and reusable shout macros.",
-        "ApplicableVersion": "any",
-        "RepoUrl": "https://github.com/reyalexffxiv/VenueHost",
-        "DalamudApiLevel": 15,
-        "Tags": [
-            "venue",
-            "dj",
-            "shout",
-            "macro",
-            "events"
-        ],
-        "DownloadLinkInstall": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
-        "DownloadLinkUpdate": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
-        "DownloadLinkTesting": "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip"
-    }
-]
+﻿{
+    "value":  [
+                  {
+                      "Author":  "ReyAlex",
+                      "Name":  "Venue Host",
+                      "InternalName":  "VenueHost",
+                      "AssemblyVersion":  "0.1.0.55",
+                      "Description":  "A lightweight venue macro assistant for DJ announcements, set transitions, giveaway reminders, and reusable shout macros.",
+                      "ApplicableVersion":  "any",
+                      "RepoUrl":  "https://github.com/reyalexffxiv/VenueHost",
+                      "DalamudApiLevel":  15,
+                      "Tags":  [
+                                   "venue",
+                                   "dj",
+                                   "shout",
+                                   "macro",
+                                   "events"
+                               ],
+                      "DownloadLinkInstall":  "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
+                      "DownloadLinkUpdate":  "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip",
+                      "DownloadLinkTesting":  "https://github.com/reyalexffxiv/VenueHost/releases/latest/download/latest.zip"
+                  }
+              ],
+    "Count":  1
+}
