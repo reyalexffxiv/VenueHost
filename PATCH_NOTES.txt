@@ -1,6 +1,6 @@
-VenueHost v0.1.0.67
+Venue Host 0.1.0.68
 
-- Export CSV now opens a Save dialog so staff can choose destination.
-- Import CSV now opens a file picker so staff can choose source CSV.
-- CSV dialogs run on an STA thread for Windows dialog compatibility.
-- Keeps lineup persistence, clickable lineup links, and SQLite packaging fixes from previous builds.
+- Added Contrast Mode for higher-contrast Venue Host windows.
+- Added safer confirmation popups for DJ Database remove and Clear Lineup.
+- Fixed DJ Database Remove so saved DJs can be deleted properly.
+- Polished Contrast Mode spacing, button alignment, and DJ Lineup event detail layout.

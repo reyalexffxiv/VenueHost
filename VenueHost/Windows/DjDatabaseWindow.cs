@@ -9,6 +9,7 @@ using System.Windows.Forms;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using VenueHost.Models;
+using VenueHost.Services;
 
 namespace VenueHost.Windows;
 
@@ -22,6 +23,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     private readonly Dictionary<string, (string Name, string Link)> cleanSnapshots = new();
     private string? pendingRemoveId;
     private string pendingRemoveName = string.Empty;
+    private bool shouldOpenRemoveConfirmation;
     private string searchText = string.Empty;
     private string csvStatusText = string.Empty;
 
@@ -42,13 +44,15 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
     public override void Draw()
     {
+        using var contrast = UiTheme.PushContrastIfEnabled(this.plugin.Configuration.ContrastModeEnabled);
+
         var config = this.plugin.Configuration;
         config.DjDatabase ??= [];
         ImGui.TextUnformatted("DJ Database");
         ImGui.TextDisabled("Save unique DJ names and stream links here. The DJ Lineup picker uses this list.");
         ImGui.Spacing();
 
-        if (this.ColoredButton("Add DJ", ButtonTone.Green, new Vector2(100, 28)))
+        if (this.ColoredButton("Add DJ", ButtonTone.Green, new Vector2(116, 32)))
         {
             var entry = new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty };
 
@@ -59,11 +63,11 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (this.ColoredButton("Export CSV", ButtonTone.Blue, new Vector2(105, 28)))
+        if (this.ColoredButton("Export CSV", ButtonTone.Blue, new Vector2(128, 32)))
             this.ExportCsv();
 
         ImGui.SameLine();
-        if (this.ColoredButton("Import CSV", ButtonTone.Blue, new Vector2(105, 28)))
+        if (this.ColoredButton("Import CSV", ButtonTone.Blue, new Vector2(128, 32)))
             this.ImportCsv();
 
         ImGui.SameLine();
@@ -86,8 +90,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         {
             ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1.2f);
             ImGui.TableSetupColumn("Link", ImGuiTableColumnFlags.WidthStretch, 2.4f);
-            ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 90f);
-            ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 100f);
+            ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 106f);
+            ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 118f);
             ImGui.TableHeadersRow();
 
             var visibleEntries = config.DjDatabase
@@ -121,7 +125,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                         ImGui.BeginDisabled();
                     }
 
-                    if (this.ColoredButton("Save", ButtonTone.Blue, new Vector2(78, 24)))
+                    if (this.ColoredButton("Save", ButtonTone.Blue, new Vector2(90, 28)))
                     {
                         this.SaveDatabaseChanges();
                         ImGui.PopID();
@@ -134,7 +138,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                     }
 
                     ImGui.TableNextColumn();
-                    if (this.ColoredButton("Remove", ButtonTone.Red, new Vector2(82, 24)))
+                    if (this.ColoredButton("Remove", ButtonTone.Red, new Vector2(100, 28)))
                     {
                         this.OpenRemoveConfirmation(entry);
                     }
@@ -399,11 +403,22 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     {
         this.pendingRemoveId = entry.RuntimeId;
         this.pendingRemoveName = string.IsNullOrWhiteSpace(entry.Name) ? "this DJ" : entry.Name.Trim();
-        ImGui.OpenPopup("Remove DJ?##VenueHostDjDbRemoveConfirm");
+
+        // The Remove button is drawn inside a row PushID. Opening the modal there
+        // would include the row ID in ImGui's popup ID stack, while the modal is
+        // rendered later outside that row. Queue the popup and open it from the
+        // window-level draw path so the confirmation modal can actually appear.
+        this.shouldOpenRemoveConfirmation = true;
     }
 
     private void DrawRemoveConfirmationPopup()
     {
+        if (this.shouldOpenRemoveConfirmation)
+        {
+            ImGui.OpenPopup("Remove DJ?##VenueHostDjDbRemoveConfirm");
+            this.shouldOpenRemoveConfirmation = false;
+        }
+
         if (this.pendingRemoveId is not null)
         {
             var windowPos = ImGui.GetWindowPos();
@@ -466,6 +481,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     {
         this.pendingRemoveId = null;
         this.pendingRemoveName = string.Empty;
+        this.shouldOpenRemoveConfirmation = false;
     }
 
     private void SyncCleanSnapshots()
@@ -485,20 +501,59 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
     private bool ColoredButton(string label, ButtonTone tone, Vector2 size)
     {
-        var (normal, hovered, active) = tone switch
-        {
-            ButtonTone.Green => (new Vector4(0.10f, 0.46f, 0.24f, 1.00f), new Vector4(0.14f, 0.56f, 0.30f, 1.00f), new Vector4(0.08f, 0.36f, 0.19f, 1.00f)),
-            ButtonTone.Red => (new Vector4(0.56f, 0.14f, 0.14f, 1.00f), new Vector4(0.68f, 0.18f, 0.18f, 1.00f), new Vector4(0.45f, 0.10f, 0.10f, 1.00f)),
-            ButtonTone.Blue => (new Vector4(0.12f, 0.34f, 0.61f, 1.00f), new Vector4(0.16f, 0.42f, 0.73f, 1.00f), new Vector4(0.09f, 0.27f, 0.50f, 1.00f)),
-            _ => (new Vector4(0.32f, 0.32f, 0.32f, 1.00f), new Vector4(0.39f, 0.39f, 0.39f, 1.00f), new Vector4(0.25f, 0.25f, 0.25f, 1.00f)),
-        };
+        var (normal, hovered, active) = this.plugin.Configuration.ContrastModeEnabled
+            ? tone switch
+            {
+                ButtonTone.Green => (new Vector4(0.00f, 0.030f, 0.010f, 1.00f), new Vector4(0.00f, 0.12f, 0.04f, 1.00f), new Vector4(0.00f, 0.22f, 0.08f, 1.00f)),
+                ButtonTone.Red => (new Vector4(0.045f, 0.000f, 0.038f, 1.00f), new Vector4(0.15f, 0.00f, 0.125f, 1.00f), new Vector4(0.26f, 0.00f, 0.22f, 1.00f)),
+                ButtonTone.Blue => (new Vector4(0.00f, 0.025f, 0.030f, 1.00f), new Vector4(0.00f, 0.11f, 0.12f, 1.00f), new Vector4(0.00f, 0.20f, 0.22f, 1.00f)),
+                _ => (new Vector4(0.00f, 0.025f, 0.018f, 1.00f), new Vector4(0.00f, 0.10f, 0.07f, 1.00f), new Vector4(0.00f, 0.18f, 0.12f, 1.00f)),
+            }
+            : tone switch
+            {
+                ButtonTone.Green => (new Vector4(0.10f, 0.46f, 0.24f, 1.00f), new Vector4(0.14f, 0.56f, 0.30f, 1.00f), new Vector4(0.08f, 0.36f, 0.19f, 1.00f)),
+                ButtonTone.Red => (new Vector4(0.56f, 0.14f, 0.14f, 1.00f), new Vector4(0.68f, 0.18f, 0.18f, 1.00f), new Vector4(0.45f, 0.10f, 0.10f, 1.00f)),
+                ButtonTone.Blue => (new Vector4(0.12f, 0.34f, 0.61f, 1.00f), new Vector4(0.16f, 0.42f, 0.73f, 1.00f), new Vector4(0.09f, 0.27f, 0.50f, 1.00f)),
+                _ => (new Vector4(0.32f, 0.32f, 0.32f, 1.00f), new Vector4(0.39f, 0.39f, 0.39f, 1.00f), new Vector4(0.25f, 0.25f, 0.25f, 1.00f)),
+            };
 
+        var contrast = this.plugin.Configuration.ContrastModeEnabled;
         ImGui.PushStyleColor(ImGuiCol.Button, normal);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, hovered);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, active);
+
+        // Contrast Mode uses dark buttons with neon labels and borders instead
+        // of bright button fills. This keeps controls high-contrast without
+        // turning every action into a large color block.
+        if (contrast)
+        {
+            var accent = GetButtonAccentColor(tone);
+            ImGui.PushStyleColor(ImGuiCol.Text, accent);
+            ImGui.PushStyleColor(ImGuiCol.Border, accent);
+        }
+
+        // Keep DJ Database action labels centered in Contrast Mode as well.
+        // The larger contrast font/padding can otherwise make short labels like
+        // Save or Remove look visually off-centre inside table cells.
+        ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0.5f, 0.5f));
         var clicked = ImGui.Button(label, size);
+        ImGui.PopStyleVar();
+
+        if (contrast)
+            ImGui.PopStyleColor(2);
         ImGui.PopStyleColor(3);
         return clicked;
+    }
+
+    private static Vector4 GetButtonAccentColor(ButtonTone tone)
+    {
+        return tone switch
+        {
+            ButtonTone.Green => new Vector4(0.10f, 1.00f, 0.25f, 1.00f),
+            ButtonTone.Red => new Vector4(1.00f, 0.05f, 0.85f, 1.00f),
+            ButtonTone.Blue => new Vector4(0.00f, 1.00f, 0.95f, 1.00f),
+            _ => new Vector4(0.58f, 1.00f, 0.78f, 1.00f),
+        };
     }
 
     private enum ButtonTone

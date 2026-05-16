@@ -28,7 +28,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          dotnet build .\VenueHost.sln --configuration Release
+          dotnet build .\VenueHost.sln -c Release
 
       - name: Package plugin
         shell: pwsh

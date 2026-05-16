@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using VenueHost.Services;
 
 namespace VenueHost.Windows;
 
@@ -56,6 +57,8 @@ public sealed class ConfigWindow : Window, IDisposable
 
     public override void Draw()
     {
+        using var contrast = UiTheme.PushContrastIfEnabled(this.plugin.Configuration.ContrastModeEnabled);
+
         // Keep Settings as separate tabs instead of side-by-side panels.
         // Setup is intentionally drawn first. The tab bar ID includes SetupFirst so old ImGui tab-order state from earlier beta builds cannot keep Macros first.
         if (ImGui.BeginTabBar("VenueHostSettingsTabsSetupFirst"))
@@ -79,6 +82,26 @@ public sealed class ConfigWindow : Window, IDisposable
     private void DrawSetupPanel()
     {
         var config = this.plugin.Configuration;
+
+        ImGui.TextUnformatted("Display");
+        ImGui.Separator();
+
+        var contrastMode = config.ContrastModeEnabled;
+        if (ImGui.Checkbox("Contrast Mode", ref contrastMode))
+        {
+            config.ContrastModeEnabled = contrastMode;
+            config.Save();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Uses darker panels, brighter accents, and slightly larger text across Venue Host windows.");
+
+        ImGui.TextDisabled("Applies to Setup, Macros, DJ Lineup, and DJ Database windows.");
+        ImGui.TextDisabled("Uses neon-style accents and slightly larger text for stronger readability.");
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
 
         ImGui.TextUnformatted("Auto Shout");
         ImGui.Separator();

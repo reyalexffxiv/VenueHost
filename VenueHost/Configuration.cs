@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 13;
+    public const int CurrentConfigVersion = 14;
 
     public const string DefaultCurrentDjMacro =
         "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -78,6 +78,12 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool CleanLegacyManualWaitLinesOnceDone { get; set; }
 
+    /// <summary>
+    /// Enables a stronger contrast palette across Venue Host windows.
+    /// This keeps the setting user-facing and neutral as "Contrast Mode".
+    /// </summary>
+    public bool ContrastModeEnabled { get; set; }
+
     [NonSerialized]
     private IDalamudPluginInterface? pluginInterface;
 
@@ -132,6 +138,7 @@ public sealed class Configuration : IPluginConfiguration
 
         // Version 13 adds a sidecar lineup snapshot so a live event schedule has
         // an extra recovery path across plugin updates.
+        // Version 14 adds Contrast Mode. Existing users keep the default off state.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.

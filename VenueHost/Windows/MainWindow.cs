@@ -7,6 +7,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 using VenueHost.Models;
+using VenueHost.Services;
 
 namespace VenueHost.Windows;
 
@@ -46,6 +47,8 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        using var contrast = UiTheme.PushContrastIfEnabled(this.plugin.Configuration.ContrastModeEnabled);
+
         if (!ImGui.BeginTabBar("VenueHostTabs"))
             return;
 
@@ -140,7 +143,8 @@ public sealed class MainWindow : Window, IDisposable
         if (!ImGui.BeginTable("VenueHostEventDetails", 2, ImGuiTableFlags.SizingStretchProp))
             return;
 
-        ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 105f);
+        var labelColumnWidth = this.plugin.Configuration.ContrastModeEnabled ? 140f : 105f;
+        ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, labelColumnWidth);
         ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
 
         ImGui.TableNextRow();
@@ -220,11 +224,21 @@ public sealed class MainWindow : Window, IDisposable
             var hasWarning = warningRows.Contains(entry.Order);
             var selected = config.SelectedDjOrder == entry.Order;
             if (selected)
-                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ToImGuiColor(new Vector4(0.16f, 0.32f, 0.52f, 0.22f)));
+            {
+                var selectedColor = this.plugin.Configuration.ContrastModeEnabled
+                    ? new Vector4(0.42f, 0.00f, 0.34f, 0.42f)
+                    : new Vector4(0.16f, 0.32f, 0.52f, 0.22f);
+                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ToImGuiColor(selectedColor));
+            }
 
             ImGui.TableNextColumn();
             if (hasWarning)
-                ImGui.TableSetBgColor(ImGuiTableBgTarget.CellBg, ToImGuiColor(new Vector4(0.70f, 0.42f, 0.12f, 0.26f)));
+            {
+                var warningColor = this.plugin.Configuration.ContrastModeEnabled
+                    ? new Vector4(1.00f, 0.95f, 0.00f, 0.35f)
+                    : new Vector4(0.70f, 0.42f, 0.12f, 0.26f);
+                ImGui.TableSetBgColor(ImGuiTableBgTarget.CellBg, ToImGuiColor(warningColor));
+            }
 
             if (ImGui.RadioButton($"{entry.Order}##SelectedDj", selected))
             {
@@ -297,7 +311,11 @@ public sealed class MainWindow : Window, IDisposable
             return;
         }
 
-        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.35f, 0.65f, 1.00f, 1.00f));
+        var linkColor = this.plugin.Configuration.ContrastModeEnabled
+            ? new Vector4(0.00f, 1.00f, 0.95f, 1.00f)
+            : new Vector4(0.35f, 0.65f, 1.00f, 1.00f);
+
+        ImGui.PushStyleColor(ImGuiCol.Text, linkColor);
         ImGui.TextUnformatted(displayLink);
         ImGui.PopStyleColor();
 
@@ -457,35 +475,42 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawClearLineupConfirmation(Configuration config)
     {
-        if (!this.showClearLineupConfirmation)
+        if (this.showClearLineupConfirmation)
+        {
+            ImGui.OpenPopup("Clear lineup?##VenueHostClearLineupConfirm");
+            this.showClearLineupConfirmation = false;
+        }
+
+        var windowPos = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+        var popupSize = new Vector2(430, 155);
+        ImGui.SetNextWindowSize(popupSize, ImGuiCond.Appearing);
+        ImGui.SetNextWindowPos(windowPos + (windowSize - popupSize) * 0.5f, ImGuiCond.Appearing);
+
+        var popupOpen = true;
+        if (!ImGui.BeginPopupModal("Clear lineup?##VenueHostClearLineupConfirm", ref popupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
             return;
 
+        ImGui.TextWrapped("Clear the full DJ lineup?");
+        ImGui.TextDisabled("This removes every DJ row. Use Add DJ to start a new lineup.");
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.20f, 0.12f, 0.04f, 0.78f));
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(0.70f, 0.42f, 0.15f, 1f));
-        if (ImGui.BeginChild("ClearLineupInlineConfirm", new Vector2(0, 86), true, ImGuiWindowFlags.NoScrollbar))
+
+        if (this.ColoredButton("Yes, clear lineup##ConfirmClearLineup", new Vector2(170, 28), ButtonTone.Danger))
         {
-            ImGui.TextUnformatted("Clear the full DJ lineup?");
-            ImGui.TextDisabled("This removes every DJ row. Use Add DJ to start a new lineup.");
-            ImGui.Spacing();
-
-            if (this.ColoredButton("Yes, clear lineup", new Vector2(150, 28), ButtonTone.Danger))
-            {
-                config.DjSchedule.Clear();
-                config.SelectedDjOrder = 0;
-                config.AutoCurrentDjShoutEnabled = false;
-                config.Save();
-                this.plugin.RefreshAutoShoutSchedule();
-                this.showClearLineupConfirmation = false;
-            }
-
-            ImGui.SameLine();
-
-            if (this.ColoredButton("Cancel", new Vector2(90, 28), ButtonTone.Neutral))
-                this.showClearLineupConfirmation = false;
+            config.DjSchedule.Clear();
+            config.SelectedDjOrder = 0;
+            config.AutoCurrentDjShoutEnabled = false;
+            config.Save();
+            this.plugin.RefreshAutoShoutSchedule();
+            ImGui.CloseCurrentPopup();
         }
-        ImGui.EndChild();
-        ImGui.PopStyleColor(2);
+
+        ImGui.SameLine();
+
+        if (this.ColoredButton("Cancel##CancelClearLineup", new Vector2(120, 28), ButtonTone.Neutral))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
     }
 
     private void AutoFillTimesFromSelected(Configuration config)
@@ -782,16 +807,47 @@ public sealed class MainWindow : Window, IDisposable
     private bool ColoredButton(string label, Vector2 size, ButtonTone tone)
     {
         var (normal, hovered, active) = GetButtonColors(tone);
+        var contrast = this.plugin.Configuration.ContrastModeEnabled;
         ImGui.PushStyleColor(ImGuiCol.Button, normal);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, hovered);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, active);
+
+        // In Contrast Mode, buttons stay dark with neon text/borders instead of
+        // using bright solid fills. This better matches screen-reader-friendly,
+        // high-contrast expectations while avoiding a wall of traffic-light blocks.
+        if (contrast)
+        {
+            var accent = GetButtonAccentColor(tone);
+            ImGui.PushStyleColor(ImGuiCol.Text, accent);
+            ImGui.PushStyleColor(ImGuiCol.Border, accent);
+        }
+
+        // Keep action labels visually centred, especially in Contrast Mode where
+        // larger text and thicker borders can make labels feel slightly offset.
+        ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0.5f, 0.5f));
         var clicked = ImGui.Button(label, size);
+        ImGui.PopStyleVar();
+
+        if (contrast)
+            ImGui.PopStyleColor(2);
         ImGui.PopStyleColor(3);
         return clicked;
     }
 
-    private static (Vector4 Normal, Vector4 Hovered, Vector4 Active) GetButtonColors(ButtonTone tone)
+    private (Vector4 Normal, Vector4 Hovered, Vector4 Active) GetButtonColors(ButtonTone tone)
     {
+        if (this.plugin.Configuration.ContrastModeEnabled)
+        {
+            return tone switch
+            {
+                ButtonTone.Primary => (new Vector4(0.00f, 0.025f, 0.030f, 1f), new Vector4(0.00f, 0.11f, 0.12f, 1f), new Vector4(0.00f, 0.20f, 0.22f, 1f)),
+                ButtonTone.Positive => (new Vector4(0.00f, 0.030f, 0.010f, 1f), new Vector4(0.00f, 0.12f, 0.04f, 1f), new Vector4(0.00f, 0.22f, 0.08f, 1f)),
+                ButtonTone.Warning => (new Vector4(0.055f, 0.025f, 0.000f, 1f), new Vector4(0.16f, 0.075f, 0.00f, 1f), new Vector4(0.26f, 0.12f, 0.00f, 1f)),
+                ButtonTone.Danger => (new Vector4(0.045f, 0.000f, 0.038f, 1f), new Vector4(0.15f, 0.00f, 0.125f, 1f), new Vector4(0.26f, 0.00f, 0.22f, 1f)),
+                _ => (new Vector4(0.00f, 0.025f, 0.018f, 1f), new Vector4(0.00f, 0.10f, 0.07f, 1f), new Vector4(0.00f, 0.18f, 0.12f, 1f)),
+            };
+        }
+
         return tone switch
         {
             ButtonTone.Primary => (new Vector4(0.13f, 0.32f, 0.55f, 1f), new Vector4(0.18f, 0.42f, 0.70f, 1f), new Vector4(0.10f, 0.26f, 0.45f, 1f)),
@@ -810,6 +866,19 @@ public sealed class MainWindow : Window, IDisposable
         Warning,
         Danger,
     }
+
+    private static Vector4 GetButtonAccentColor(ButtonTone tone)
+    {
+        return tone switch
+        {
+            ButtonTone.Primary => new Vector4(0.00f, 1.00f, 0.95f, 1f),
+            ButtonTone.Positive => new Vector4(0.10f, 1.00f, 0.25f, 1f),
+            ButtonTone.Warning => new Vector4(1.00f, 0.62f, 0.00f, 1f),
+            ButtonTone.Danger => new Vector4(1.00f, 0.05f, 0.85f, 1f),
+            _ => new Vector4(0.58f, 1.00f, 0.78f, 1f),
+        };
+    }
+
 
     private void DjPickerAndSave(DjScheduleEntry entry)
     {

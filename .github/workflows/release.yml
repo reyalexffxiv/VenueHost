@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: windows-2022
@@ -35,11 +38,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $zipPath = ".\dist\VenueHost-latest.zip"
-
           gh release view $tag --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $zipPath --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "Venue Host beta release." --prerelease
+            gh release create $tag .\dist\VenueHost-latest.zip --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "Venue Host beta release." --prerelease
           } else {
-            gh release upload $tag $zipPath --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag .\dist\VenueHost-latest.zip --repo $env:GITHUB_REPOSITORY --clobber
           }
