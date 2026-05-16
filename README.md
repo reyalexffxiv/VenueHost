@@ -2,6 +2,10 @@
 
 Venue Host is a lightweight plugin to help with Venue Hosting.
 
+## User Guide
+
+- [Open the DJ Lineup User Guide PDF](docs/VenueHost_DJ_Lineup_Guide.pdf)
+
 ## Current beta features
 
 - DJ Lineup tab with server-time schedule rows
@@ -15,8 +19,8 @@ Venue Host is a lightweight plugin to help with Venue Hosting.
 
 ## Author
 
-ReyAlex
+Rey Alex
 
 ## Version
 
-0.1.0.62 is the current beta bug-fix release of Venue Host.
+0.1.0.67 is the current beta bug-fix release of Venue Host.
