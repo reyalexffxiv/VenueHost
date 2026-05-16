@@ -5,9 +5,6 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
   release:
     runs-on: windows-2022
@@ -27,18 +24,10 @@ jobs:
           Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
           Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
 
-      - name: Build
+      - name: Build and package
         shell: pwsh
         run: |
-          dotnet build .\VenueHost.sln -c Release
-
-      - name: Package latest.zip
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force .\release | Out-Null
-          Copy-Item .\VenueHost\bin\Release\VenueHost.dll .\release\
-          Copy-Item .\VenueHost\VenueHost.json .\release\
-          Compress-Archive -Path .\release\* -DestinationPath .\latest.zip -Force
+          powershell -ExecutionPolicy Bypass -File .\scripts\Build-DalamudPackage.ps1
 
       - name: Create or update release
         shell: pwsh
@@ -46,9 +35,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
+          $zipPath = ".\dist\VenueHost-latest.zip"
+
           gh release view $tag --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag .\latest.zip --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "First beta release." --prerelease
+            gh release create $tag $zipPath --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "Venue Host beta release." --prerelease
           } else {
-            gh release upload $tag .\latest.zip --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag $zipPath --repo $env:GITHUB_REPOSITORY --clobber
           }
