@@ -17,7 +17,7 @@ Venue Host is a lightweight plugin to help with Venue Hosting.
 
 ## Guide
 
-- [DJ Lineup Guide](docs/Venue_Host_guide.pdf)
+- [DJ Lineup Guide](docs/VenueHost_DJ_Lineup_Guide.pdf)
 
 ## Author
 
