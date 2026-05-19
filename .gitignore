@@ -1,25 +1,21 @@
 # Build output
 bin/
 obj/
+release/
+
+# Generated Dalamud package staging
+*.nupkg
 
 # User/local files
-.vs/
-.idea/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
+.vs/
+.idea/
+*.DotSettings.user
 
-# Archives / release artifacts
-*.zip
-latest.zip
+# OS/editor noise
+.DS_Store
+Thumbs.db
 
-# Logs and temp files
-*.log
-*.tmp
-
-release/
+# Local packaging/check folders
 zipcheck/
-latest.zip
-!dist/
-!dist/*.zip

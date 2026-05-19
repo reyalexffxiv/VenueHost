@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 14;
+    public const int CurrentConfigVersion = 17;
 
     public const string DefaultCurrentDjMacro =
         "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -29,6 +29,27 @@ public sealed class Configuration : IPluginConfiguration
 
     public const string DefaultTellCurrentDjMacro =
         "/tell <t> Our current DJ is {CurrentDJName} - {CurrentDJLink}";
+
+    public const string DefaultPhotographerShoutMacro =
+        "/sh Are you looking for a Photographer?\n" +
+        "/sh Our current photographers are: {StaffNames}\n" +
+        "/sh Reach out to any of them with a Tell <3";
+
+    public const string DefaultBarShoutMacro =
+        "/sh Our Barkeepers are here to satisfy your thirst!\n" +
+        "/sh Our dear {StaffNames} {IsAre} at our bar to serve you.\n" +
+        "/sh Don't be shy, come say hello! <3";
+
+    public const string DefaultCourtesanShoutMacro =
+        "/sh Our Courtesans are here to indulge your every desire.\n" +
+        "/sh Our dear {StaffNames} {IsAre} waiting to spoil and pamper you.\n" +
+        "/sh Don't be shy, step closer and tell them your wishes! <3";
+
+    public const string DefaultMaidShoutMacro =
+        "/sh Our Maids are here to provide you with flawless care and comfort.\n" +
+        "/sh Our dear {StaffNames} {IsAre} at your beck and call for the evening.\n" +
+        "/sh Don't be shy, step inside and allow them to serve you! <3\n" +
+        "/sh Let them brighten your day <3";
 
     public int Version { get; set; } = CurrentConfigVersion;
 
@@ -44,6 +65,20 @@ public sealed class Configuration : IPluginConfiguration
         new DjDatabaseEntry { Name = "Rey Alex", Link = "https://www.twitch.tv/reyalexxx" },
     ];
 
+    // Preserve the existing JSON field name so current users keep their saved staff schedule
+    // rows while the C# model moves away from the old photographer-only naming.
+    [Newtonsoft.Json.JsonProperty("Photographers")]
+    public List<StaffScheduleEntry> StaffSchedule { get; set; } = [];
+
+    [Newtonsoft.Json.JsonProperty("SelectedPhotographerOrder")]
+    public int SelectedStaffScheduleOrder { get; set; } = 0;
+
+    public List<StaffDatabaseEntry> StaffDatabase { get; set; } = [];
+
+    public List<string> StaffRoles { get; set; } = ["Photographer", "Bar", "Courtesan", "Maid"];
+
+    public List<StaffRoleShoutSetting> StaffRoleShoutSettings { get; set; } = [];
+
     // Legacy fields kept so old beta configs can still deserialize safely.
     public string CurrentDJName { get; set; } = string.Empty;
     public string CurrentDJLink { get; set; } = string.Empty;
@@ -58,6 +93,12 @@ public sealed class Configuration : IPluginConfiguration
     public string EventStartTime { get; set; } = "18:00";
     public string EventEndDate { get; set; } = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public string EventEndTime { get; set; } = "02:00";
+
+    public string StaffStartDate { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public string StaffStartTime { get; set; } = "18:00";
+    public string StaffEndDate { get; set; } = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public string StaffEndTime { get; set; } = "02:00";
+
     public string GiveawayText { get; set; } = "2M Gil Giveaway";
     public string GiveawayCommand { get; set; } = "!urban";
 
@@ -75,6 +116,18 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool AutoCurrentDjShoutEnabled { get; set; } = true;
     public int AutoCurrentDjShoutIntervalMinutes { get; set; } = 10;
+
+    public string SelectedStaffRole { get; set; } = "Photographer";
+    public string PhotographerShoutMacro { get; set; } = DefaultPhotographerShoutMacro;
+    public string BarShoutMacro { get; set; } = DefaultBarShoutMacro;
+    public string CourtesanShoutMacro { get; set; } = DefaultCourtesanShoutMacro;
+    public string MaidShoutMacro { get; set; } = DefaultMaidShoutMacro;
+    public float PhotographerShoutMacroDelaySeconds { get; set; } = 2f;
+    public bool AutoPhotographerShoutEnabled { get; set; }
+    public int AutoPhotographerShoutIntervalMinutes { get; set; } = 15;
+
+    public bool AutoStaffRoleShoutStaggerEnabled { get; set; } = true;
+    public int AutoStaffRoleShoutStaggerMinutes { get; set; } = 3;
 
     public bool CleanLegacyManualWaitLinesOnceDone { get; set; }
 
@@ -100,8 +153,12 @@ public sealed class Configuration : IPluginConfiguration
         this.InitializeDjDatabaseStore(pluginInterface);
         this.InitializeLineupStore(pluginInterface);
         this.EnsureScheduleDefaults();
+        this.EnsureStaffRoles();
+        this.EnsureStaffScheduleDefaults();
         this.EnsureEventWindowDefaults();
+        this.EnsureStaffWindowDefaults();
         this.NormalizeDjDatabase(saveToStore: false);
+        this.EnsureStaffRoleShoutSettings();
         this.ClampAutoShoutSettings();
     }
 
@@ -109,6 +166,10 @@ public sealed class Configuration : IPluginConfiguration
     {
         this.DjSchedule ??= [];
         this.DjDatabase ??= [];
+        this.StaffSchedule ??= [];
+        this.StaffDatabase ??= [];
+        this.StaffRoles ??= ["Photographer", "Bar", "Courtesan", "Maid"];
+        this.StaffRoleShoutSettings ??= [];
 
         // Version 6 added the reusable DJ database and target tell macro.
         if (this.Version < 6 && this.DjDatabase.Count == 0)
@@ -139,6 +200,8 @@ public sealed class Configuration : IPluginConfiguration
         // Version 13 adds a sidecar lineup snapshot so a live event schedule has
         // an extra recovery path across plugin updates.
         // Version 14 adds Contrast Mode. Existing users keep the default off state.
+        // Version 15 adds per-role Staff Schedule auto shout settings.
+        // Version 16 adds stagger/queue spacing between automatic role shouts.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.
@@ -155,6 +218,176 @@ public sealed class Configuration : IPluginConfiguration
         {
             this.Version = CurrentConfigVersion;
             this.Save();
+        }
+    }
+
+
+    public void EnsureStaffRoles()
+    {
+        this.StaffRoles ??= [];
+
+        if (this.StaffRoles.Count == 0)
+        {
+            this.StaffRoles.Add("Photographer");
+            this.StaffRoles.Add("Bar");
+            this.StaffRoles.Add("Courtesan");
+            this.StaffRoles.Add("Maid");
+        }
+
+        // Pull existing beta roles into the central role list once, then keep
+        // Staff Database and Staff Schedule using this normalized list.
+        foreach (var role in (this.StaffDatabase ?? []).Select(entry => entry.Role)
+                     .Concat((this.StaffSchedule ?? []).Select(entry => entry.Role))
+                     .Concat((this.StaffRoleShoutSettings ?? []).Select(entry => entry.Role)))
+        {
+            this.AddStaffRole(role, save: false);
+        }
+
+        this.StaffRoles = this.StaffRoles
+            .Select(NormalizeStaffRoleName)
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!this.StaffRoles.Any(role => role.Equals("Photographer", StringComparison.OrdinalIgnoreCase)))
+            this.StaffRoles.Insert(0, "Photographer");
+
+        foreach (var entry in this.StaffDatabase ?? [])
+            entry.Role = this.GetExistingOrDefaultStaffRole(entry.Role);
+
+        foreach (var entry in this.StaffSchedule ?? [])
+            entry.Role = this.GetExistingOrDefaultStaffRole(entry.Role);
+    }
+
+    public bool AddStaffRole(string? role, bool save = true)
+    {
+        this.StaffRoles ??= [];
+        role = NormalizeStaffRoleName(role);
+        if (string.IsNullOrWhiteSpace(role))
+            return false;
+
+        if (this.StaffRoles.Any(existing => existing.Equals(role, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        this.StaffRoles.Add(role);
+        this.StaffRoles = this.StaffRoles.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+        this.GetOrCreateStaffRoleShoutSetting(role);
+        if (save)
+            this.Save();
+        return true;
+    }
+
+    public bool RenameStaffRole(string oldRole, string newRole)
+    {
+        oldRole = NormalizeStaffRoleName(oldRole);
+        newRole = NormalizeStaffRoleName(newRole);
+        if (string.IsNullOrWhiteSpace(oldRole) || string.IsNullOrWhiteSpace(newRole))
+            return false;
+
+        if (!this.StaffRoles.Any(role => role.Equals(oldRole, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        if (!oldRole.Equals(newRole, StringComparison.OrdinalIgnoreCase) &&
+            this.StaffRoles.Any(role => role.Equals(newRole, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        for (var i = 0; i < this.StaffRoles.Count; i++)
+        {
+            if (this.StaffRoles[i].Equals(oldRole, StringComparison.OrdinalIgnoreCase))
+                this.StaffRoles[i] = newRole;
+        }
+
+        foreach (var entry in this.StaffDatabase ?? [])
+        {
+            if (entry.Role.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
+                entry.Role = newRole;
+        }
+
+        foreach (var entry in this.StaffSchedule ?? [])
+        {
+            if (entry.Role.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
+                entry.Role = newRole;
+        }
+
+        foreach (var setting in this.StaffRoleShoutSettings ?? [])
+        {
+            if (setting.Role.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
+                setting.Role = newRole;
+        }
+
+        if (this.SelectedStaffRole.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
+            this.SelectedStaffRole = newRole;
+
+        this.EnsureStaffRoles();
+        this.EnsureStaffRoleShoutSettings();
+        this.Save();
+        return true;
+    }
+
+    public bool RemoveStaffRole(string role)
+    {
+        role = NormalizeStaffRoleName(role);
+        if (string.IsNullOrWhiteSpace(role) || this.StaffRoles.Count <= 1)
+            return false;
+
+        var removed = this.StaffRoles.RemoveAll(existing => existing.Equals(role, StringComparison.OrdinalIgnoreCase)) > 0;
+        if (!removed)
+            return false;
+
+        var fallback = this.StaffRoles.FirstOrDefault() ?? "Photographer";
+        foreach (var entry in this.StaffDatabase ?? [])
+        {
+            if (entry.Role.Equals(role, StringComparison.OrdinalIgnoreCase))
+                entry.Role = fallback;
+        }
+
+        foreach (var entry in this.StaffSchedule ?? [])
+        {
+            if (entry.Role.Equals(role, StringComparison.OrdinalIgnoreCase))
+                entry.Role = fallback;
+        }
+
+        this.StaffRoleShoutSettings?.RemoveAll(setting => setting.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        if (this.SelectedStaffRole.Equals(role, StringComparison.OrdinalIgnoreCase))
+            this.SelectedStaffRole = fallback;
+
+        this.EnsureStaffRoles();
+        this.EnsureStaffRoleShoutSettings();
+        this.Save();
+        return true;
+    }
+
+    public string GetExistingOrDefaultStaffRole(string? role)
+    {
+        this.StaffRoles ??= [];
+        var normalized = NormalizeStaffRoleName(role);
+        return this.StaffRoles.FirstOrDefault(existing => existing.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+               ?? this.StaffRoles.FirstOrDefault()
+               ?? "Photographer";
+    }
+
+    private static string NormalizeStaffRoleName(string? role)
+    {
+        return Regex.Replace((role ?? string.Empty).Trim(), @"\s+", " ");
+    }
+
+
+    public void EnsureStaffRoleShoutSettings()
+    {
+        this.StaffRoleShoutSettings ??= [];
+        this.EnsureStaffRoles();
+
+        foreach (var role in this.GetKnownStaffRoles())
+            this.GetOrCreateStaffRoleShoutSetting(role);
+
+        foreach (var setting in this.StaffRoleShoutSettings)
+        {
+            setting.Role = string.IsNullOrWhiteSpace(setting.Role) ? "Photographer" : setting.Role.Trim();
+            setting.IntervalMinutes = Math.Clamp(setting.IntervalMinutes, 1, 120);
+            setting.DelaySeconds = Math.Clamp(setting.DelaySeconds, 0f, 10f);
+            if (string.IsNullOrWhiteSpace(setting.Macro))
+                setting.Macro = this.GetDefaultStaffShoutMacro(setting.Role);
         }
     }
 
@@ -213,6 +446,43 @@ public sealed class Configuration : IPluginConfiguration
 
         startUtc = startDate.Date.Add(startTime);
         endUtc = endDate.Date.Add(endTime);
+        return endUtc > startUtc;
+    }
+
+    private static string NormalizeDateText(string? value, DateTime fallback)
+    {
+        return TryParseServerDate(value, out var parsed)
+            ? parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : fallback.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    }
+
+    private static string NormalizeTimeText(string? value, string fallback)
+    {
+        return TryParseServerTime(value, out var parsed)
+            ? parsed.ToString(@"hh\:mm", CultureInfo.InvariantCulture)
+            : fallback;
+    }
+
+    public void EnsureStaffWindowDefaults()
+    {
+        this.StaffStartDate = NormalizeDateText(this.StaffStartDate, DateTime.UtcNow);
+        this.StaffEndDate = NormalizeDateText(this.StaffEndDate, DateTime.UtcNow.AddDays(1));
+        this.StaffStartTime = NormalizeTimeText(this.StaffStartTime, string.IsNullOrWhiteSpace(this.EventStartTime) ? "18:00" : this.EventStartTime);
+        this.StaffEndTime = NormalizeTimeText(this.StaffEndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "02:00" : this.EventEndTime);
+    }
+
+    public bool TryGetStaffWindow(out DateTime startUtc, out DateTime endUtc)
+    {
+        this.EnsureStaffWindowDefaults();
+        startUtc = default;
+        endUtc = default;
+
+        if (!DateTime.TryParseExact($"{this.StaffStartDate} {this.StaffStartTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out startUtc))
+            return false;
+
+        if (!DateTime.TryParseExact($"{this.StaffEndDate} {this.StaffEndTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out endUtc))
+            return false;
+
         return endUtc > startUtc;
     }
 
@@ -450,6 +720,296 @@ public sealed class Configuration : IPluginConfiguration
             : now >= start || now < end;
     }
 
+
+    public void EnsureStaffScheduleDefaults()
+    {
+        this.StaffSchedule ??= [];
+        this.StaffDatabase ??= [];
+        this.StaffRoles ??= ["Photographer", "Bar", "Courtesan", "Maid"];
+        this.StaffRoleShoutSettings ??= [];
+        this.NormalizeStaffScheduleOrders();
+        foreach (var entry in this.StaffSchedule)
+        {
+            entry.Role = this.GetExistingOrDefaultStaffRole(entry.Role);
+            if (!TryParseServerTime(entry.StartTime, out _))
+                entry.StartTime = "18:00";
+            if (!TryParseServerTime(entry.EndTime, out _))
+                entry.EndTime = "19:00";
+        }
+
+        if (this.StaffSchedule.Count == 0)
+        {
+            this.SelectedStaffScheduleOrder = 0;
+            return;
+        }
+
+        if (this.SelectedStaffScheduleOrder <= 0 || this.StaffSchedule.All(entry => entry.Order != this.SelectedStaffScheduleOrder))
+            this.SelectedStaffScheduleOrder = this.StaffSchedule[0].Order;
+    }
+
+    public void NormalizeStaffScheduleOrders()
+    {
+        for (var i = 0; i < this.StaffSchedule.Count; i++)
+            this.StaffSchedule[i].Order = i + 1;
+    }
+
+    public StaffScheduleEntry? GetSelectedStaffScheduleEntry()
+    {
+        this.EnsureStaffScheduleDefaults();
+        return this.StaffSchedule.FirstOrDefault(entry => entry.Order == this.SelectedStaffScheduleOrder) ?? this.StaffSchedule.FirstOrDefault();
+    }
+
+    public static bool HasUsableStaffScheduleEntry(StaffScheduleEntry? entry)
+    {
+        return entry is not null && !string.IsNullOrWhiteSpace(entry.Name);
+    }
+
+    public List<StaffScheduleTimelineSlot> BuildStaffScheduleTimeline()
+    {
+        var result = new List<StaffScheduleTimelineSlot>();
+        if (!this.TryGetStaffWindow(out var eventStartUtc, out var eventEndUtc))
+            return result;
+
+        DateTime? previousStartUtc = null;
+
+        foreach (var entry in this.StaffSchedule.OrderBy(entry => entry.Order))
+        {
+            if (!HasUsableStaffScheduleEntry(entry) ||
+                !TryParseServerTime(entry.StartTime, out var startTime) ||
+                !TryParseServerTime(entry.EndTime, out var endTime) ||
+                startTime == endTime)
+            {
+                continue;
+            }
+
+            var slotStartUtc = eventStartUtc.Date.Add(startTime);
+            while (slotStartUtc < eventStartUtc)
+                slotStartUtc = slotStartUtc.AddDays(1);
+
+            if (previousStartUtc.HasValue)
+            {
+                while (slotStartUtc < previousStartUtc.Value)
+                    slotStartUtc = slotStartUtc.AddDays(1);
+            }
+
+            var slotEndUtc = slotStartUtc.Date.Add(endTime);
+            if (slotEndUtc <= slotStartUtc)
+                slotEndUtc = slotEndUtc.AddDays(1);
+
+            var inside = slotStartUtc >= eventStartUtc && slotEndUtc <= eventEndUtc;
+            result.Add(new StaffScheduleTimelineSlot(entry, slotStartUtc, slotEndUtc, inside));
+            previousStartUtc = slotStartUtc;
+        }
+
+        return result;
+    }
+
+    public List<StaffScheduleEntry> GetCurrentServerTimeStaff(DateTime utcNow)
+    {
+        return this.GetCurrentServerTimeStaffForRole(utcNow, null);
+    }
+
+    public List<StaffScheduleEntry> GetCurrentServerTimeStaffForRole(DateTime utcNow, string? role)
+    {
+        this.EnsureStaffScheduleDefaults();
+        return this.BuildStaffScheduleTimeline()
+            .Where(slot => slot.Entry.Available && slot.IsInsideEventWindow && utcNow >= slot.StartUtc && utcNow < slot.EndUtc)
+            .Where(slot => string.IsNullOrWhiteSpace(role) || string.Equals(slot.Entry.Role?.Trim(), role.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Select(slot => slot.Entry)
+            .OrderBy(entry => entry.Order)
+            .ToList();
+    }
+
+    public StaffScheduleTimelineSlot? GetNextStaffScheduleTimelineSlot(DateTime utcNow)
+    {
+        return this.GetNextStaffScheduleTimelineSlotForRole(utcNow, null);
+    }
+
+    public StaffScheduleTimelineSlot? GetNextStaffScheduleTimelineSlotForRole(DateTime utcNow, string? role)
+    {
+        return this.BuildStaffScheduleTimeline()
+            .Where(slot => slot.Entry.Available && slot.IsInsideEventWindow && slot.EndUtc > utcNow)
+            .Where(slot => string.IsNullOrWhiteSpace(role) || string.Equals(slot.Entry.Role?.Trim(), role.Trim(), StringComparison.OrdinalIgnoreCase))
+            .OrderBy(slot => slot.StartUtc < utcNow ? utcNow : slot.StartUtc)
+            .ThenBy(slot => slot.Order)
+            .FirstOrDefault();
+    }
+
+    public Dictionary<string, string> BuildSelectedStaffRoleVariables(DateTime? utcNow = null)
+    {
+        return this.BuildStaffRoleVariables(this.SelectedStaffRole, utcNow);
+    }
+
+    public Dictionary<string, string> BuildStaffRoleVariables(string? role, DateTime? utcNow = null)
+    {
+        role = string.IsNullOrWhiteSpace(role) ? "Photographer" : role.Trim();
+        var current = this.GetCurrentServerTimeStaffForRole(utcNow ?? DateTime.UtcNow, role);
+        var namesList = current
+            .Select(entry => entry.Name?.Trim() ?? string.Empty)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var names = string.Join(", ", namesList);
+        var fallback = $"no active {role.ToLowerInvariant()} staff right now";
+        var oneOrMany = namesList.Count == 1;
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["VenueName"] = this.VenueName,
+            ["EventName"] = this.EventName,
+            ["Role"] = role,
+            ["StaffNames"] = string.IsNullOrWhiteSpace(names) ? fallback : names,
+            ["StaffCount"] = namesList.Count.ToString(CultureInfo.InvariantCulture),
+            ["IsAre"] = oneOrMany ? "is" : "are",
+            ["AreIs"] = oneOrMany ? "is" : "are",
+            ["StaffSchedule"] = string.IsNullOrWhiteSpace(names) ? fallback : names,
+            ["Photographers"] = string.IsNullOrWhiteSpace(names) ? fallback : names,
+            ["PhotographerNames"] = string.IsNullOrWhiteSpace(names) ? fallback : names,
+        };
+    }
+
+    public IReadOnlyList<string> GetKnownStaffRoles()
+    {
+        this.EnsureStaffRoles();
+        return this.StaffRoles
+            .Select(role => role.Trim())
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public StaffRoleShoutSetting GetOrCreateStaffRoleShoutSetting(string? role)
+    {
+        role = string.IsNullOrWhiteSpace(role) ? "Photographer" : role.Trim();
+        this.StaffRoleShoutSettings ??= [];
+
+        var existing = this.StaffRoleShoutSettings.FirstOrDefault(setting =>
+            string.Equals(setting.Role?.Trim(), role, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+            return existing;
+
+        var created = new StaffRoleShoutSetting
+        {
+            Role = role,
+            AutoEnabled = role.Equals("Photographer", StringComparison.OrdinalIgnoreCase) ? this.AutoPhotographerShoutEnabled : false,
+            IntervalMinutes = Math.Clamp(role.Equals("Photographer", StringComparison.OrdinalIgnoreCase) ? this.AutoPhotographerShoutIntervalMinutes : 15, 1, 120),
+            Macro = this.GetStoredOrDefaultStaffShoutMacro(role),
+            DelaySeconds = Math.Clamp(this.PhotographerShoutMacroDelaySeconds, 0f, 10f),
+        };
+        this.StaffRoleShoutSettings.Add(created);
+        return created;
+    }
+
+    public IEnumerable<StaffRoleShoutSetting> GetAutoEnabledStaffRoleShoutSettings()
+    {
+        this.EnsureStaffRoleShoutSettings();
+        var knownRoles = this.GetKnownStaffRoles().ToList();
+        var orderByRole = knownRoles
+            .Select((role, index) => new { role, index })
+            .ToDictionary(item => item.role, item => item.index, StringComparer.OrdinalIgnoreCase);
+
+        return this.StaffRoleShoutSettings
+            .Where(setting => setting.AutoEnabled && orderByRole.ContainsKey(setting.Role))
+            .OrderBy(setting => orderByRole[setting.Role])
+            .ThenBy(setting => setting.Role, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public string GetStoredOrDefaultStaffShoutMacro(string? role)
+    {
+        role = string.IsNullOrWhiteSpace(role) ? "Photographer" : role.Trim();
+        return role.Equals("Bar", StringComparison.OrdinalIgnoreCase) ? this.BarShoutMacro :
+               role.Equals("Courtesan", StringComparison.OrdinalIgnoreCase) ? this.CourtesanShoutMacro :
+               role.Equals("Maid", StringComparison.OrdinalIgnoreCase) ? this.MaidShoutMacro :
+               role.Equals("Photographer", StringComparison.OrdinalIgnoreCase) ? this.PhotographerShoutMacro :
+               this.GetDefaultStaffShoutMacro(role);
+    }
+
+    public string GetDefaultStaffShoutMacro(string? role)
+    {
+        role = string.IsNullOrWhiteSpace(role) ? "Photographer" : role.Trim();
+        return role.Equals("Bar", StringComparison.OrdinalIgnoreCase) ? DefaultBarShoutMacro :
+               role.Equals("Courtesan", StringComparison.OrdinalIgnoreCase) ? DefaultCourtesanShoutMacro :
+               role.Equals("Maid", StringComparison.OrdinalIgnoreCase) ? DefaultMaidShoutMacro :
+               role.Equals("Photographer", StringComparison.OrdinalIgnoreCase) ? DefaultPhotographerShoutMacro :
+               $"/sh Our current {role} staff: {{StaffNames}}";
+    }
+
+    public string GetStaffShoutMacro(string? role)
+    {
+        return this.GetOrCreateStaffRoleShoutSetting(role).Macro;
+    }
+
+    public void SetStaffShoutMacro(string? role, string value)
+    {
+        role = string.IsNullOrWhiteSpace(role) ? "Photographer" : role.Trim();
+        var setting = this.GetOrCreateStaffRoleShoutSetting(role);
+        setting.Macro = value;
+
+        // Keep legacy fields updated so beta configs remain easy to inspect.
+        if (role.Equals("Bar", StringComparison.OrdinalIgnoreCase))
+            this.BarShoutMacro = value;
+        else if (role.Equals("Courtesan", StringComparison.OrdinalIgnoreCase))
+            this.CourtesanShoutMacro = value;
+        else if (role.Equals("Maid", StringComparison.OrdinalIgnoreCase))
+            this.MaidShoutMacro = value;
+        else if (role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
+            this.PhotographerShoutMacro = value;
+    }
+
+    public float GetStaffShoutDelaySeconds(string? role)
+    {
+        return this.GetOrCreateStaffRoleShoutSetting(role).DelaySeconds;
+    }
+
+    public void SetStaffShoutDelaySeconds(string? role, float value)
+    {
+        this.GetOrCreateStaffRoleShoutSetting(role).DelaySeconds = Math.Clamp(value, 0f, 10f);
+    }
+
+    public bool IsAnyStaffAutoShoutEnabled()
+    {
+        this.EnsureStaffRoleShoutSettings();
+        return this.StaffRoleShoutSettings.Any(setting => setting.AutoEnabled);
+    }
+
+    public sealed class StaffScheduleTimelineSlot
+    {
+        public StaffScheduleTimelineSlot(StaffScheduleEntry entry, DateTime startUtc, DateTime endUtc, bool isInsideEventWindow)
+        {
+            this.Entry = entry;
+            this.StartUtc = startUtc;
+            this.EndUtc = endUtc;
+            this.IsInsideEventWindow = isInsideEventWindow;
+        }
+
+        public StaffScheduleEntry Entry { get; }
+        public DateTime StartUtc { get; }
+        public DateTime EndUtc { get; }
+        public bool IsInsideEventWindow { get; }
+        public int Order => this.Entry.Order;
+    }
+
+    public string GetUniqueStaffName(string desiredName, StaffDatabaseEntry? currentEntry = null)
+    {
+        desiredName = (desiredName ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(desiredName))
+            desiredName = "New Staff";
+
+        var baseName = desiredName;
+        var suffix = 2;
+        while (this.StaffDatabase.Any(entry => !ReferenceEquals(entry, currentEntry) &&
+                                               string.Equals(NormalizeDjDatabaseName(entry.Name), NormalizeDjDatabaseName(desiredName), StringComparison.OrdinalIgnoreCase)))
+        {
+            desiredName = $"{baseName} {suffix}";
+            suffix++;
+        }
+
+        return desiredName;
+    }
+
     /// <summary>
     /// Removes manual wait-only lines once during config migration, because Venue Host exposes wait boxes in the UI.
     /// Users can still add &lt;wait.N&gt; manually later if they really want a one-off override.
@@ -494,6 +1054,13 @@ public sealed class Configuration : IPluginConfiguration
             changed = true;
         }
 
+        var photographerMacro = this.PhotographerShoutMacro;
+        if (RemoveManualWaitLines(ref photographerMacro))
+        {
+            this.PhotographerShoutMacro = photographerMacro;
+            changed = true;
+        }
+
         return changed;
     }
 
@@ -505,6 +1072,10 @@ public sealed class Configuration : IPluginConfiguration
         this.TransitionMacroDelaySeconds = 2f;
         this.TellCurrentDjMacro = DefaultTellCurrentDjMacro;
         this.TellCurrentDjMacroDelaySeconds = 2f;
+        this.PhotographerShoutMacro = DefaultPhotographerShoutMacro;
+        this.PhotographerShoutMacroDelaySeconds = 2f;
+        this.StaffRoleShoutSettings = [];
+        this.EnsureStaffRoleShoutSettings();
     }
 
     public Dictionary<string, string> BuildVariables(DjScheduleEntry? currentDjOverride = null, DjScheduleEntry? nextDjOverride = null)
@@ -715,6 +1286,12 @@ public sealed class Configuration : IPluginConfiguration
 
         if (this.AutoCurrentDjShoutIntervalMinutes > 120)
             this.AutoCurrentDjShoutIntervalMinutes = 120;
+
+        if (this.AutoStaffRoleShoutStaggerMinutes < 1)
+            this.AutoStaffRoleShoutStaggerMinutes = 1;
+
+        if (this.AutoStaffRoleShoutStaggerMinutes > 30)
+            this.AutoStaffRoleShoutStaggerMinutes = 30;
     }
 
     public void Save()

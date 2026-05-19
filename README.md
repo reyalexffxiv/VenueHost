@@ -1,6 +1,6 @@
 # Venue Host
 
-Venue Host is a lightweight plugin to help with Venue Hosting.
+Venue Host is a lightweight Dalamud plugin to help with FFXIV venue hosting.
 
 ## Current beta features
 
@@ -11,7 +11,10 @@ Venue Host is a lightweight plugin to help with Venue Hosting.
 - Current DJ, transition, and target tell buttons
 - Auto-shout scheduling based on FFXIV server time / UTC
 - Transition shout at DJ handoff boundaries
-- Editable macro templates and wait settings
+- Staff Schedule tab with reusable staff rows and active-role windows
+- Staff Database window for reusable staff names and roles
+- Role-based staff shout macros with automatic queue spacing
+- Editable DJ and staff macro templates with wait settings
 - Contrast Mode for higher-contrast Venue Host windows
 - Commands: `/venuehost`, `/vhost`, and `/venuehost settings`
 
@@ -25,4 +28,4 @@ ReyAlex
 
 ## Version
 
-0.1.0.68 is the current beta release of Venue Host.
+0.2.0.0 is the current beta release of Venue Host.

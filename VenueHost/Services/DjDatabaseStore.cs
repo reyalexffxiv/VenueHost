@@ -18,6 +18,9 @@ public sealed class DjDatabaseStore : IDisposable
 {
     private const int CurrentSchemaVersion = 1;
 
+    private static readonly object BatteriesInitLock = new();
+    private static bool batteriesInitialized;
+
     private readonly string connectionString;
 
     public DjDatabaseStore(string databasePath)
@@ -28,10 +31,11 @@ public sealed class DjDatabaseStore : IDisposable
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            Cache = SqliteCacheMode.Default,
+            Pooling = false,
         }.ToString();
 
-        SQLitePCL.Batteries_V2.Init();
+        EnsureSqliteInitialized();
         this.InitializeSchema();
     }
 
@@ -106,7 +110,30 @@ public sealed class DjDatabaseStore : IDisposable
 
     public void Dispose()
     {
-        // Microsoft.Data.Sqlite does not require explicit store-level disposal.
+        // Pooling is disabled in the connection string to avoid delayed background
+        // pruning in Dalamud/FFXIV. Clearing here is a defensive no-op for this store,
+        // but also protects older config/runtime paths if they ever opened a pooled
+        // SQLite connection before this fix.
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void EnsureSqliteInitialized()
+    {
+        if (batteriesInitialized)
+        {
+            return;
+        }
+
+        lock (BatteriesInitLock)
+        {
+            if (batteriesInitialized)
+            {
+                return;
+            }
+
+            SQLitePCL.Batteries_V2.Init();
+            batteriesInitialized = true;
+        }
     }
 
     private static DjDatabaseEntry Normalize(DjDatabaseEntry entry)

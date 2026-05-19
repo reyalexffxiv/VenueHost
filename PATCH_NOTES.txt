@@ -1,6 +1,12 @@
-Venue Host 0.1.0.68
+Venue Host 0.2.0.0
 
-- Added Contrast Mode for higher-contrast Venue Host windows.
-- Added safer confirmation popups for DJ Database remove and Clear Lineup.
-- Fixed DJ Database Remove so saved DJs can be deleted properly.
-- Polished Contrast Mode spacing, button alignment, and DJ Lineup event detail layout.
+- Refactored Venue Host toward a cleaner service-based architecture.
+- Added shared ServiceContext/BaseService pattern for current and future modules.
+- Moved DJ auto-shout, staff auto-shout, shout sending, UI toggles, and file dialogs into services.
+- Removed direct Plugin window dependencies; windows now use Configuration and IServiceContext.
+- Renamed legacy PhotographerEntry internals to StaffScheduleEntry while preserving saved config compatibility.
+- Added Staff Schedule and Staff Database support for reusable staff names, roles, and role auto-shouts.
+- Fixed staff auto-shout queue fairness so due roles are processed in order under DJ chat queue pressure.
+- Aligned Upcoming role shouts preview with the real scheduler queue.
+- Fixed CSV import/export file dialogs so they no longer block Dalamud UI drawing.
+- Polished main/settings window sizing, table headers, time columns, event details, and mascot placement.

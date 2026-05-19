@@ -1,9 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Collections.Generic;
-using System.Text;
 using System.Numerics;
+using System.Text;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using VenueHost.Models;
@@ -12,10 +12,10 @@ using VenueHost.Services;
 namespace VenueHost.Windows;
 
 /// <summary>
-/// Reusable DJ database. Staff can save DJ names and stream links once,
-/// then pick them directly from DJ Lineup rows.
+/// Reusable staff database. Roles are managed in Settings -> Staff Schedule,
+/// then selected here so staff data stays normalized.
 /// </summary>
-public sealed class DjDatabaseWindow : Window, IDisposable
+public sealed class StaffDatabaseWindow : Window, IDisposable
 {
     private readonly Configuration configuration;
     private readonly IServiceContext services;
@@ -28,7 +28,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
 
     /// <summary>Native file dialog helper that does not block Dalamud's UI draw thread.</summary>
     private FileDialogService FileDialogs => this.Services.Get<FileDialogService>();
-    private readonly Dictionary<string, (string Name, string Link)> cleanSnapshots = new();
+    private readonly Dictionary<string, (string Name, string Role)> cleanSnapshots = new();
     private string? pendingRemoveId;
     private string pendingRemoveName = string.Empty;
     private bool shouldOpenRemoveConfirmation;
@@ -37,8 +37,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     private PendingFileDialog? pendingCsvDialog;
     private bool pendingCsvDialogIsImport;
 
-    public DjDatabaseWindow(Configuration configuration, IServiceContext services)
-        : base("DJ Database###VenueHostDjDatabase")
+    public StaffDatabaseWindow(Configuration configuration, IServiceContext services)
+        : base("Staff Database###VenueHostStaffDatabase")
     {
         this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         this.services = services ?? throw new ArgumentNullException(nameof(services));
@@ -59,19 +59,25 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         this.CompletePendingCsvDialog();
 
         var config = this.Configuration;
-        config.DjDatabase ??= [];
-        ImGui.TextUnformatted("DJ Database");
-        ImGui.TextDisabled("Save unique DJ names and stream links here. The DJ Lineup picker uses this list.");
+        config.StaffDatabase ??= [];
+        config.EnsureStaffRoles();
+
+        ImGui.TextUnformatted("Staff Database");
+        ImGui.TextDisabled("Save reusable staff names here. Roles are created in Settings -> Staff Schedule, then picked here.");
         ImGui.Spacing();
 
-        if (this.ColoredButton("Add DJ", ButtonTone.Green, new Vector2(116, 32)))
+        if (this.ColoredButton("Add Staff", ButtonTone.Green, new Vector2(116, 32)))
         {
-            var entry = new DjDatabaseEntry { Name = config.GetUniqueDjDatabaseName("New DJ"), Link = string.Empty };
+            var entry = new StaffDatabaseEntry
+            {
+                Name = config.GetUniqueStaffName("New Staff"),
+                Role = config.GetExistingOrDefaultStaffRole(config.SelectedStaffRole),
+            };
 
             // Keep new rows at the top while staff fill them in. The row is sorted
             // into the permanent database order only after its Save button is used.
-            config.DjDatabase.Insert(0, entry);
-            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
+            config.StaffDatabase.Insert(0, entry);
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Role);
         }
 
         var csvDialogPending = this.pendingCsvDialog is not null;
@@ -90,30 +96,30 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             ImGui.EndDisabled();
 
         ImGui.SameLine();
-        ImGui.TextDisabled("Choose where to save or load the CSV file.");
+        ImGui.TextDisabled("CSV format: Name,Role. Roles must already exist in Staff Schedule settings.");
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Export opens a Save dialog. Import opens a file picker.");
+            ImGui.SetTooltip("Export opens a Save dialog. Import opens a file picker. Unknown imported roles use the selected/default role.");
 
         if (!string.IsNullOrWhiteSpace(this.csvStatusText))
             ImGui.TextDisabled(this.csvStatusText);
 
         ImGui.Spacing();
-        ImGui.TextUnformatted("Search DJ:");
+        ImGui.TextUnformatted("Search Staff:");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(300f);
-        ImGui.InputText("##DjDatabaseSearch", ref this.searchText, 80);
+        ImGui.InputText("##StaffDatabaseSearch", ref this.searchText, 80);
         ImGui.Spacing();
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
-        if (ImGui.BeginTable("VenueHostDjDatabaseTable", 4, tableFlags))
+        if (ImGui.BeginTable("VenueHostStaffDatabaseTable", 4, tableFlags))
         {
-            ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1.2f);
-            ImGui.TableSetupColumn("Link", ImGuiTableColumnFlags.WidthStretch, 2.4f);
+            ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+            ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthStretch, 1.1f);
             ImGui.TableSetupColumn("Save", ImGuiTableColumnFlags.WidthFixed, 106f);
             ImGui.TableSetupColumn("Remove", ImGuiTableColumnFlags.WidthFixed, 118f);
             ImGui.TableHeadersRow();
 
-            var visibleEntries = config.DjDatabase
+            var visibleEntries = config.StaffDatabase
                 .Where(entry => MatchesSearch(entry, this.searchText))
                 .ToList();
 
@@ -121,28 +127,26 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextDisabled("No DJs found.");
+                ImGui.TextDisabled("No staff found.");
             }
             else
             {
                 foreach (var entry in visibleEntries)
                 {
                     this.EnsureCleanSnapshot(entry);
-                    ImGui.PushID($"DjDatabaseRow{entry.RuntimeId}");
+                    ImGui.PushID($"StaffDatabaseRow{entry.RuntimeId}");
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
-                    this.InputWithoutAutoSave("##DbName", entry.Name, value => entry.Name = value, 120);
+                    this.InputWithoutAutoSave("##StaffName", entry.Name, value => entry.Name = value, 120);
 
                     ImGui.TableNextColumn();
-                    this.InputWithoutAutoSave("##DbLink", entry.Link, value => entry.Link = value, 240);
+                    this.RoleComboWithoutAutoSave(entry);
 
                     ImGui.TableNextColumn();
                     var dirty = this.IsDirty(entry);
                     if (!dirty)
-                    {
                         ImGui.BeginDisabled();
-                    }
 
                     if (this.ColoredButton("Save", ButtonTone.Blue, new Vector2(90, 28)))
                     {
@@ -152,15 +156,11 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                     }
 
                     if (!dirty)
-                    {
                         ImGui.EndDisabled();
-                    }
 
                     ImGui.TableNextColumn();
                     if (this.ColoredButton("Remove", ButtonTone.Red, new Vector2(100, 28)))
-                    {
                         this.OpenRemoveConfirmation(entry);
-                    }
 
                     ImGui.PopID();
                 }
@@ -172,16 +172,15 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         this.DrawRemoveConfirmationPopup();
     }
 
-
     private string GetDefaultCsvPath()
-        => Path.Combine(this.Services.PluginInterface.ConfigDirectory.FullName, "dj_database.csv");
+        => Path.Combine(this.Services.PluginInterface.ConfigDirectory.FullName, "staff_database.csv");
 
     private void ExportCsv()
     {
         this.StartCsvDialog(
             isImport: false,
             statusText: "Waiting for export location...",
-            dialogFactory: () => this.FileDialogs.ShowSaveCsvDialog("Export DJ Database", this.GetDefaultCsvPath()));
+            dialogFactory: () => this.FileDialogs.ShowSaveCsvDialog("Export Staff Database", this.GetDefaultCsvPath()));
     }
 
     private void ExportCsv(string path)
@@ -191,12 +190,12 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
 
             var builder = new StringBuilder();
-            builder.AppendLine("Name,Link");
-            foreach (var entry in this.Configuration.DjDatabase.OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase))
-                builder.AppendLine($"{EscapeCsv(entry.Name)},{EscapeCsv(entry.Link)}");
+            builder.AppendLine("Name,Role");
+            foreach (var entry in this.Configuration.StaffDatabase.OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase))
+                builder.AppendLine($"{EscapeCsv(entry.Name)},{EscapeCsv(entry.Role)}");
 
             File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
-            this.csvStatusText = $"Exported {this.Configuration.DjDatabase.Count} DJs to {path}.";
+            this.csvStatusText = $"Exported {this.Configuration.StaffDatabase.Count} staff entries to {path}.";
         }
         catch (Exception ex)
         {
@@ -209,7 +208,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         this.StartCsvDialog(
             isImport: true,
             statusText: "Waiting for import file...",
-            dialogFactory: () => this.FileDialogs.ShowOpenCsvDialog("Import DJ Database", this.GetDefaultCsvPath()));
+            dialogFactory: () => this.FileDialogs.ShowOpenCsvDialog("Import Staff Database", this.GetDefaultCsvPath()));
     }
 
     private void ImportCsv(string path)
@@ -222,7 +221,10 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                 return;
             }
 
+            var config = this.Configuration;
+            config.EnsureStaffRoles();
             var imported = 0;
+            var remappedRoles = 0;
             foreach (var row in File.ReadAllLines(path).Skip(1))
             {
                 if (string.IsNullOrWhiteSpace(row))
@@ -233,33 +235,35 @@ public sealed class DjDatabaseWindow : Window, IDisposable
                     continue;
 
                 var name = columns[0].Trim();
-                var link = columns.Count > 1 ? columns[1].Trim() : string.Empty;
-                var existing = this.Configuration.DjDatabase.FirstOrDefault(entry =>
+                var importedRole = columns.Count > 1 ? columns[1].Trim() : string.Empty;
+                var role = config.GetExistingOrDefaultStaffRole(importedRole);
+                if (!string.IsNullOrWhiteSpace(importedRole) && !role.Equals(importedRole, StringComparison.OrdinalIgnoreCase))
+                    remappedRoles++;
+
+                var existing = config.StaffDatabase.FirstOrDefault(entry =>
                     string.Equals((entry.Name ?? string.Empty).Trim(), name, StringComparison.OrdinalIgnoreCase));
 
                 if (existing is null)
-                {
-                    this.Configuration.DjDatabase.Add(new DjDatabaseEntry { Name = name, Link = link });
-                }
+                    config.StaffDatabase.Add(new StaffDatabaseEntry { Name = name, Role = role });
                 else
                 {
                     existing.Name = name;
-                    existing.Link = link;
+                    existing.Role = role;
                 }
 
                 imported++;
             }
 
             this.SaveDatabaseChanges();
-            this.csvStatusText = $"Imported/updated {imported} DJs from {path}.";
+            this.csvStatusText = remappedRoles > 0
+                ? $"Imported/updated {imported} staff entries from {path}. {remappedRoles} unknown role(s) used the default selected role."
+                : $"Imported/updated {imported} staff entries from {path}.";
         }
         catch (Exception ex)
         {
             this.csvStatusText = $"Import failed: {ex.Message}";
         }
     }
-
-
 
     private void StartCsvDialog(bool isImport, string statusText, Func<PendingFileDialog> dialogFactory)
     {
@@ -353,13 +357,36 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         return values;
     }
 
-    private static bool MatchesSearch(DjDatabaseEntry entry, string searchText)
+    private void RoleComboWithoutAutoSave(StaffDatabaseEntry entry)
+    {
+        var config = this.Configuration;
+        var currentRole = config.GetExistingOrDefaultStaffRole(entry.Role);
+        entry.Role = currentRole;
+
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo("##StaffDbRole", currentRole))
+            return;
+
+        foreach (var role in config.GetKnownStaffRoles())
+        {
+            var selected = string.Equals(currentRole, role, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(role, selected))
+                entry.Role = role;
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private static bool MatchesSearch(StaffDatabaseEntry entry, string searchText)
     {
         if (string.IsNullOrWhiteSpace(searchText))
             return true;
 
         return (entry.Name?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
-               (entry.Link?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false);
+               (entry.Role?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
     private void InputWithoutAutoSave(string label, string value, Action<string> setter, int maxLength)
@@ -367,36 +394,50 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         var editedValue = value ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
         if (ImGui.InputText(label, ref editedValue, maxLength))
-        {
             setter(editedValue);
-        }
     }
 
-    private void EnsureCleanSnapshot(DjDatabaseEntry entry)
+    private void EnsureCleanSnapshot(StaffDatabaseEntry entry)
     {
         if (!this.cleanSnapshots.ContainsKey(entry.RuntimeId))
-        {
-            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
-        }
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Role);
     }
 
-    private bool IsDirty(DjDatabaseEntry entry)
+    private bool IsDirty(StaffDatabaseEntry entry)
     {
         this.EnsureCleanSnapshot(entry);
         var snapshot = this.cleanSnapshots[entry.RuntimeId];
-        return !string.Equals(entry.Name, snapshot.Name, StringComparison.Ordinal)
-            || !string.Equals(entry.Link, snapshot.Link, StringComparison.Ordinal);
+        return !string.Equals(entry.Name, snapshot.Name, StringComparison.Ordinal) ||
+               !string.Equals(entry.Role, snapshot.Role, StringComparison.Ordinal);
     }
 
-    private void OpenRemoveConfirmation(DjDatabaseEntry entry)
+    private void SaveDatabaseChanges()
+    {
+        var config = this.Configuration;
+        config.EnsureStaffRoles();
+
+        foreach (var entry in config.StaffDatabase)
+        {
+            entry.Name = (entry.Name ?? string.Empty).Trim();
+            entry.Role = config.GetExistingOrDefaultStaffRole(entry.Role);
+            entry.Link = string.Empty;
+        }
+
+        config.StaffDatabase = config.StaffDatabase
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Name))
+            .GroupBy(entry => entry.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        config.Save();
+        this.SyncCleanSnapshots();
+    }
+
+    private void OpenRemoveConfirmation(StaffDatabaseEntry entry)
     {
         this.pendingRemoveId = entry.RuntimeId;
-        this.pendingRemoveName = string.IsNullOrWhiteSpace(entry.Name) ? "this DJ" : entry.Name.Trim();
-
-        // The Remove button is drawn inside a row PushID. Opening the modal there
-        // would include the row ID in ImGui's popup ID stack, while the modal is
-        // rendered later outside that row. Queue the popup and open it from the
-        // window-level draw path so the confirmation modal can actually appear.
+        this.pendingRemoveName = string.IsNullOrWhiteSpace(entry.Name) ? "this staff member" : entry.Name.Trim();
         this.shouldOpenRemoveConfirmation = true;
     }
 
@@ -404,7 +445,7 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     {
         if (this.shouldOpenRemoveConfirmation)
         {
-            ImGui.OpenPopup("Remove DJ?##VenueHostDjDbRemoveConfirm");
+            ImGui.OpenPopup("Remove Staff?##VenueHostStaffDbRemoveConfirm");
             this.shouldOpenRemoveConfirmation = false;
         }
 
@@ -412,56 +453,48 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         {
             var windowPos = ImGui.GetWindowPos();
             var windowSize = ImGui.GetWindowSize();
-            var popupSize = new Vector2(390, 145);
+            var popupSize = new Vector2(410, 145);
             ImGui.SetNextWindowSize(popupSize, ImGuiCond.Appearing);
             ImGui.SetNextWindowPos(windowPos + (windowSize - popupSize) * 0.5f, ImGuiCond.Appearing);
         }
 
         var popupOpen = true;
-        if (!ImGui.BeginPopupModal("Remove DJ?##VenueHostDjDbRemoveConfirm", ref popupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
-        {
+        if (!ImGui.BeginPopupModal("Remove Staff?##VenueHostStaffDbRemoveConfirm", ref popupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
             return;
-        }
 
-        ImGui.TextWrapped($"Remove {this.pendingRemoveName} from the DJ Database?");
-        ImGui.TextDisabled("Existing lineup rows using this DJ will stay unchanged.");
+        ImGui.TextWrapped($"Remove {this.pendingRemoveName} from the Staff Database?");
+        ImGui.TextDisabled("Existing Staff Schedule rows using this name will stay unchanged.");
         ImGui.Spacing();
 
-        if (this.ColoredButton("Remove##ConfirmRemoveDj", ButtonTone.Red, new Vector2(120, 28)))
+        if (this.ColoredButton("Remove##ConfirmRemoveStaff", ButtonTone.Red, new Vector2(120, 28)))
         {
             if (this.pendingRemoveId is { } removeId)
-            {
                 this.RemoveEntry(removeId);
-            }
 
             this.ClearPendingRemove();
             ImGui.CloseCurrentPopup();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Cancel##CancelRemoveDj", new Vector2(120, 28)))
+        if (ImGui.Button("Cancel##CancelRemoveStaff", new Vector2(120, 28)))
         {
             this.ClearPendingRemove();
             ImGui.CloseCurrentPopup();
         }
 
         if (!popupOpen)
-        {
             this.ClearPendingRemove();
-        }
 
         ImGui.EndPopup();
     }
 
     private void RemoveEntry(string runtimeId)
     {
-        var entry = this.Configuration.DjDatabase.FirstOrDefault(databaseEntry => databaseEntry.RuntimeId == runtimeId);
+        var entry = this.Configuration.StaffDatabase.FirstOrDefault(databaseEntry => databaseEntry.RuntimeId == runtimeId);
         if (entry is null)
-        {
             return;
-        }
 
-        this.Configuration.DjDatabase.Remove(entry);
+        this.Configuration.StaffDatabase.Remove(entry);
         this.cleanSnapshots.Remove(entry.RuntimeId);
         this.SaveDatabaseChanges();
     }
@@ -476,16 +509,8 @@ public sealed class DjDatabaseWindow : Window, IDisposable
     private void SyncCleanSnapshots()
     {
         this.cleanSnapshots.Clear();
-        foreach (var entry in this.Configuration.DjDatabase)
-        {
-            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Link);
-        }
-    }
-
-    private void SaveDatabaseChanges()
-    {
-        this.Configuration.CommitDjDatabaseChanges();
-        this.SyncCleanSnapshots();
+        foreach (var entry in this.Configuration.StaffDatabase)
+            this.cleanSnapshots[entry.RuntimeId] = (entry.Name, entry.Role);
     }
 
     private bool ColoredButton(string label, ButtonTone tone, Vector2 size)
@@ -510,20 +535,19 @@ public sealed class DjDatabaseWindow : Window, IDisposable
         ImGui.PushStyleColor(ImGuiCol.Button, normal);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, hovered);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, active);
-
-        // Contrast Mode uses dark buttons with neon labels and borders instead
-        // of bright button fills. This keeps controls high-contrast without
-        // turning every action into a large color block.
         if (contrast)
         {
-            var accent = GetButtonAccentColor(tone);
+            var accent = tone switch
+            {
+                ButtonTone.Green => new Vector4(0.10f, 1.00f, 0.25f, 1.00f),
+                ButtonTone.Red => new Vector4(1.00f, 0.05f, 0.85f, 1.00f),
+                ButtonTone.Blue => new Vector4(0.00f, 1.00f, 0.95f, 1.00f),
+                _ => new Vector4(0.58f, 1.00f, 0.78f, 1.00f),
+            };
             ImGui.PushStyleColor(ImGuiCol.Text, accent);
             ImGui.PushStyleColor(ImGuiCol.Border, accent);
         }
 
-        // Keep DJ Database action labels centered in Contrast Mode as well.
-        // The larger contrast font/padding can otherwise make short labels like
-        // Save or Remove look visually off-centre inside table cells.
         ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0.5f, 0.5f));
         var clicked = ImGui.Button(label, size);
         ImGui.PopStyleVar();
@@ -532,17 +556,6 @@ public sealed class DjDatabaseWindow : Window, IDisposable
             ImGui.PopStyleColor(2);
         ImGui.PopStyleColor(3);
         return clicked;
-    }
-
-    private static Vector4 GetButtonAccentColor(ButtonTone tone)
-    {
-        return tone switch
-        {
-            ButtonTone.Green => new Vector4(0.10f, 1.00f, 0.25f, 1.00f),
-            ButtonTone.Red => new Vector4(1.00f, 0.05f, 0.85f, 1.00f),
-            ButtonTone.Blue => new Vector4(0.00f, 1.00f, 0.95f, 1.00f),
-            _ => new Vector4(0.58f, 1.00f, 0.78f, 1.00f),
-        };
     }
 
     private enum ButtonTone

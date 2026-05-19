@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
-using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -26,13 +22,23 @@ public sealed class Plugin : IDalamudPlugin
 
     private static readonly string[] CommandNames = ["/venuehost", "/vhost"];
 
-    public Configuration Configuration { get; }
+    private Configuration Configuration { get; }
 
-    public GameChatService GameChatService { get; }
+    private GameChatService GameChatService { get; }
 
-    public ISharedImmediateTexture? MascotTexture { get; }
+    /// <summary>Service that expands configured macros and queues manual shout commands.</summary>
+    private ShoutService ShoutService { get; }
 
-    public readonly WindowSystem WindowSystem = new("VenueHost");
+    /// <summary>Service that owns UI-only helpers such as window toggles and shared textures.</summary>
+    private UiService UiService { get; }
+
+    /// <summary>Service that opens native file dialogs without blocking Dalamud UI drawing.</summary>
+    private FileDialogService FileDialogService { get; }
+
+    /// <summary>Shared service context used by plugin services and windows.</summary>
+    private IServiceContext Services { get; }
+
+    private readonly WindowSystem windowSystem = new("VenueHost");
 
     private MainWindow MainWindow { get; }
 
@@ -40,28 +46,25 @@ public sealed class Plugin : IDalamudPlugin
 
     private DjDatabaseWindow DjDatabaseWindow { get; }
 
-    private DateTime nextAutoCurrentDjShoutAtUtc = DateTime.MinValue;
+    private StaffDatabaseWindow StaffDatabaseWindow { get; }
 
-    private bool previousAutoCurrentDjShoutEnabled;
+    /// <summary>Service that owns automatic DJ shout timing and status.</summary>
+    private DjAutoShoutService DjAutoShoutService { get; }
 
-    private int previousAutoCurrentDjShoutIntervalMinutes;
-
-    private bool autoSawUsableDjSinceEnabled;
-
-    private int? lastAutoDjOrderSeen;
-
-    public string AutoShoutStatus { get; private set; } = "Disabled.";
-
-    public DateTime? NextAutoShoutAtUtc => this.nextAutoCurrentDjShoutAtUtc == DateTime.MinValue || this.nextAutoCurrentDjShoutAtUtc == DateTime.MaxValue
-        ? null
-        : this.nextAutoCurrentDjShoutAtUtc;
+    /// <summary>Service that owns automatic staff role shout timing and staggered queue state.</summary>
+    private StaffAutoShoutService StaffAutoShoutService { get; }
 
     public Plugin()
     {
         this.Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.Configuration.Initialize(PluginInterface);
-        this.previousAutoCurrentDjShoutEnabled = this.Configuration.AutoCurrentDjShoutEnabled;
-        this.previousAutoCurrentDjShoutIntervalMinutes = this.Configuration.AutoCurrentDjShoutIntervalMinutes;
+
+        this.Services = new ServiceContext(
+            PluginInterface,
+            CommandManager,
+            Framework,
+            Log,
+            TextureProvider);
 
         if (this.Configuration.CleanLegacyManualWaitLinesOnce())
         {
@@ -70,14 +73,38 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         this.GameChatService = new GameChatService(Log);
-        this.MascotTexture = LoadMascotTexture();
-        this.MainWindow = new MainWindow(this);
-        this.ConfigWindow = new ConfigWindow(this);
-        this.DjDatabaseWindow = new DjDatabaseWindow(this);
+        this.Services.Add(this.GameChatService);
 
-        this.WindowSystem.AddWindow(this.MainWindow);
-        this.WindowSystem.AddWindow(this.ConfigWindow);
-        this.WindowSystem.AddWindow(this.DjDatabaseWindow);
+        this.ShoutService = new ShoutService(this.Configuration, this.Services);
+        this.Services.Add(this.ShoutService);
+
+        this.DjAutoShoutService = new DjAutoShoutService(this.Configuration, this.Services);
+        this.Services.Add(this.DjAutoShoutService);
+
+        this.StaffAutoShoutService = new StaffAutoShoutService(this.Configuration, this.Services);
+        this.Services.Add(this.StaffAutoShoutService);
+
+        this.FileDialogService = new FileDialogService(this.Configuration, this.Services);
+        this.Services.Add(this.FileDialogService);
+
+        this.UiService = new UiService(this.Configuration, this.Services);
+        this.Services.Add(this.UiService);
+
+        this.MainWindow = new MainWindow(this.Configuration, this.Services);
+        this.ConfigWindow = new ConfigWindow(this.Configuration, this.Services);
+        this.DjDatabaseWindow = new DjDatabaseWindow(this.Configuration, this.Services);
+        this.StaffDatabaseWindow = new StaffDatabaseWindow(this.Configuration, this.Services);
+
+        this.UiService.BindWindowToggles(
+            () => this.MainWindow.Toggle(),
+            () => this.ConfigWindow.Toggle(),
+            () => this.DjDatabaseWindow.Toggle(),
+            () => this.StaffDatabaseWindow.Toggle());
+
+        this.windowSystem.AddWindow(this.MainWindow);
+        this.windowSystem.AddWindow(this.ConfigWindow);
+        this.windowSystem.AddWindow(this.DjDatabaseWindow);
+        this.windowSystem.AddWindow(this.StaffDatabaseWindow);
 
         foreach (var commandName in CommandNames)
         {
@@ -88,7 +115,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         Framework.Update += this.OnFrameworkUpdate;
-        PluginInterface.UiBuilder.Draw += this.WindowSystem.Draw;
+        PluginInterface.UiBuilder.Draw += this.windowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi += this.ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += this.ToggleMainUi;
 
@@ -96,22 +123,9 @@ public sealed class Plugin : IDalamudPlugin
     }
 
 
-    private static ISharedImmediateTexture? LoadMascotTexture()
-    {
-        try
-        {
-            return TextureProvider.GetFromManifestResource(Assembly.GetExecutingAssembly(), "VenueHost.Assets.cute_peepo.png");
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Could not load Venue Host mascot texture.");
-            return null;
-        }
-    }
-
     public void Dispose()
     {
-        PluginInterface.UiBuilder.Draw -= this.WindowSystem.Draw;
+        PluginInterface.UiBuilder.Draw -= this.windowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= this.ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= this.ToggleMainUi;
         Framework.Update -= this.OnFrameworkUpdate;
@@ -119,304 +133,24 @@ public sealed class Plugin : IDalamudPlugin
         foreach (var commandName in CommandNames)
             CommandManager.RemoveHandler(commandName);
 
-        this.WindowSystem.RemoveAllWindows();
+        this.windowSystem.RemoveAllWindows();
+        this.StaffDatabaseWindow.Dispose();
         this.DjDatabaseWindow.Dispose();
         this.ConfigWindow.Dispose();
         this.MainWindow.Dispose();
+        this.UiService.Dispose();
     }
 
-    public void ToggleMainUi() => this.MainWindow.Toggle();
+    private void ToggleMainUi() => this.UiService.ToggleMainUi();
 
-    public void ToggleConfigUi() => this.ConfigWindow.Toggle();
+    private void ToggleConfigUi() => this.UiService.ToggleConfigUi();
 
-    public void ToggleDjDatabaseUi() => this.DjDatabaseWindow.Toggle();
-
-    /// <summary>
-    /// Recalculates the next automatic shout from the current UTC/server time.
-    /// Useful after staff edit the DJ schedule while auto-shout is already enabled.
-    /// </summary>
-    public void RefreshAutoShoutSchedule()
-    {
-        this.nextAutoCurrentDjShoutAtUtc = DateTime.MinValue;
-        this.previousAutoCurrentDjShoutEnabled = false;
-
-        this.AutoShoutStatus = this.Configuration.AutoCurrentDjShoutEnabled
-            ? "Schedule refreshed. Next shout will be recalculated from the DJ lineup."
-            : "Disabled.";
-
-    }
-
-
-    public string GetNextAutoShoutTypeDescription()
-    {
-        if (!this.Configuration.AutoCurrentDjShoutEnabled)
-            return "Disabled";
-
-        if (!this.NextAutoShoutAtUtc.HasValue)
-            return "Waiting for valid schedule";
-
-        var targetDj = this.Configuration.GetCurrentServerTimeDj(this.NextAutoShoutAtUtc.Value);
-        if (targetDj is null)
-            return "No DJ found for next shout";
-
-        var previousDj = this.Configuration.GetPreviousDjBefore(targetDj);
-        var targetSlot = this.Configuration.GetTimelineSlotForEntry(targetDj);
-        if (previousDj is not null && targetSlot is not null && IsScheduledSlotStart(this.NextAutoShoutAtUtc.Value, targetSlot))
-            return $"Transition, {previousDj.DJName} → {targetDj.DJName}";
-
-        return $"Current DJ shout, {targetDj.DJName}";
-    }
-
-    public void SendCurrentDjShout()
-    {
-        this.SendCurrentDjShoutFor(this.Configuration.GetSelectedDj());
-    }
-
-    private void SendCurrentDjShoutFor(Models.DjScheduleEntry? currentDj)
-    {
-        if (!HasUsableDj(currentDj))
-            return;
-
-        var expandedMacro = MacroVariableService.Expand(
-            this.Configuration.CurrentDjMacro,
-            this.Configuration.BuildVariables(currentDj));
-
-        this.GameChatService.QueueMacroCommands(expandedMacro, TimeSpan.FromSeconds(this.Configuration.CurrentDjMacroDelaySeconds));
-    }
-
-    public void SendTransitionShout()
-    {
-        var currentDj = this.Configuration.GetSelectedDj();
-        var nextDj = this.Configuration.GetNextDjAfter(currentDj);
-        this.SendTransitionShoutFor(currentDj, nextDj);
-    }
-
-    public void TellCurrentDjToTarget()
-    {
-        var currentDj = this.Configuration.GetSelectedDj();
-        if (!HasUsableDj(currentDj))
-            return;
-
-        var expandedMacro = MacroVariableService.Expand(
-            this.Configuration.TellCurrentDjMacro,
-            this.Configuration.BuildVariables(currentDj));
-
-        this.GameChatService.QueueMacroCommands(expandedMacro, TimeSpan.FromSeconds(this.Configuration.TellCurrentDjMacroDelaySeconds));
-    }
-
-    private void SendTransitionShoutFor(Models.DjScheduleEntry? endingDj, Models.DjScheduleEntry? incomingDj)
-    {
-        if (!HasUsableDj(endingDj) || !HasUsableDj(incomingDj))
-            return;
-
-        var expandedMacro = MacroVariableService.Expand(
-            this.Configuration.TransitionMacro,
-            this.Configuration.BuildVariables(endingDj, incomingDj));
-
-        this.GameChatService.QueueMacroCommands(expandedMacro, TimeSpan.FromSeconds(this.Configuration.TransitionMacroDelaySeconds));
-    }
-
-
-    private static bool HasUsableDj(Models.DjScheduleEntry? entry)
-    {
-        return entry is not null && !string.IsNullOrWhiteSpace(entry.DJName);
-    }
-
-    public string PreviewCurrentDjShout()
-    {
-        return MacroVariableService.Expand(this.Configuration.CurrentDjMacro, this.Configuration.BuildVariables());
-    }
-
-    public string PreviewTransitionShout()
-    {
-        return MacroVariableService.Expand(this.Configuration.TransitionMacro, this.Configuration.BuildVariables());
-    }
 
     private void OnFrameworkUpdate(IFramework framework)
     {
         this.GameChatService.FlushOnePendingCommand();
-        this.HandleAutoCurrentDjShout();
-    }
-
-    private void HandleAutoCurrentDjShout()
-    {
-        var config = this.Configuration;
-        config.ClampAutoShoutSettings();
-
-        if (!config.AutoCurrentDjShoutEnabled)
-        {
-            this.nextAutoCurrentDjShoutAtUtc = DateTime.MinValue;
-            this.previousAutoCurrentDjShoutEnabled = false;
-            this.autoSawUsableDjSinceEnabled = false;
-            this.lastAutoDjOrderSeen = null;
-            this.AutoShoutStatus = "Disabled.";
-            return;
-        }
-
-        var nowUtc = DateTime.UtcNow;
-        var interval = TimeSpan.FromMinutes(config.AutoCurrentDjShoutIntervalMinutes);
-        var intervalChanged = this.previousAutoCurrentDjShoutIntervalMinutes != config.AutoCurrentDjShoutIntervalMinutes;
-
-        if (!this.previousAutoCurrentDjShoutEnabled || this.nextAutoCurrentDjShoutAtUtc == DateTime.MinValue || intervalChanged)
-        {
-            this.nextAutoCurrentDjShoutAtUtc = this.CalculateNextAutoShoutUtc(nowUtc);
-            this.previousAutoCurrentDjShoutEnabled = true;
-            this.previousAutoCurrentDjShoutIntervalMinutes = config.AutoCurrentDjShoutIntervalMinutes;
-            this.autoSawUsableDjSinceEnabled = false;
-            this.lastAutoDjOrderSeen = null;
-        }
-
-        if (this.nextAutoCurrentDjShoutAtUtc == DateTime.MaxValue)
-        {
-            this.AutoShoutStatus = "Enabled, but no valid event-window schedule time was found.";
-            return;
-        }
-
-        if (nowUtc < this.nextAutoCurrentDjShoutAtUtc)
-        {
-            var activeDj = config.GetCurrentServerTimeDj(nowUtc);
-            if (activeDj is not null)
-                this.RememberAutoDj(activeDj);
-
-            var activeText = activeDj is null ? "no active DJ right now" : $"active DJ: {activeDj.DJName}";
-            this.AutoShoutStatus = $"Enabled. Using event window, {activeText}. Next shout at {this.nextAutoCurrentDjShoutAtUtc:yyyy-MM-dd HH:mm:ss} ST.";
-            return;
-        }
-
-        if (this.GameChatService.HasPendingCommands)
-        {
-            this.nextAutoCurrentDjShoutAtUtc = nowUtc.AddSeconds(10);
-            this.AutoShoutStatus = $"Waiting for queued chat to finish. Pending: {this.GameChatService.PendingCommandCount}.";
-            return;
-        }
-
-        var scheduledShoutAtUtc = this.nextAutoCurrentDjShoutAtUtc;
-        var currentDj = config.GetCurrentServerTimeDj(scheduledShoutAtUtc);
-        if (currentDj is null)
-        {
-            this.nextAutoCurrentDjShoutAtUtc = this.CalculateNextAutoShoutUtc(nowUtc.AddSeconds(1));
-            if (this.ShouldDisableAutoAfterLastDj(config, this.nextAutoCurrentDjShoutAtUtc))
-            {
-                this.DisableAutoShoutAfterLastDj();
-                return;
-            }
-
-            this.AutoShoutStatus = this.nextAutoCurrentDjShoutAtUtc == DateTime.MaxValue
-                ? $"Enabled. No active DJ at {nowUtc:yyyy-MM-dd HH:mm:ss} ST and no future DJ slot was found."
-                : $"Enabled. No active DJ at {nowUtc:yyyy-MM-dd HH:mm:ss} ST. Next shout at {this.nextAutoCurrentDjShoutAtUtc:yyyy-MM-dd HH:mm:ss} ST.";
-            return;
-        }
-
-        this.RememberAutoDj(currentDj);
-
-        var previousDj = config.GetPreviousDjBefore(currentDj);
-        var currentSlot = config.GetTimelineSlotForEntry(currentDj);
-        if (previousDj is not null && currentSlot is not null && IsScheduledSlotStart(scheduledShoutAtUtc, currentSlot))
-        {
-            this.RememberAutoDj(currentDj);
-            this.SendTransitionShoutFor(previousDj, currentDj);
-            this.nextAutoCurrentDjShoutAtUtc = this.CalculateNextAutoShoutUtc(nowUtc.AddSeconds(1));
-            if (this.ShouldDisableAutoAfterLastDj(config, this.nextAutoCurrentDjShoutAtUtc))
-            {
-                this.DisableAutoShoutAfterLastDj();
-                return;
-            }
-
-            this.AutoShoutStatus = $"Sent transition shout: {previousDj.DJName} → {currentDj.DJName}. Next at {FormatServerTime(this.nextAutoCurrentDjShoutAtUtc)}.";
-            return;
-        }
-
-        this.RememberAutoDj(currentDj);
-        this.SendCurrentDjShoutFor(currentDj);
-        this.nextAutoCurrentDjShoutAtUtc = this.CalculateNextAutoShoutUtc(nowUtc.AddSeconds(1));
-        if (this.ShouldDisableAutoAfterLastDj(config, this.nextAutoCurrentDjShoutAtUtc))
-        {
-            this.DisableAutoShoutAfterLastDj();
-            return;
-        }
-
-        this.AutoShoutStatus = $"Sent current DJ shout for {currentDj.DJName}. Next at {FormatServerTime(this.nextAutoCurrentDjShoutAtUtc)}.";
-    }
-
-
-    private static string FormatServerTime(DateTime utcTime)
-    {
-        return utcTime == DateTime.MaxValue ? "none" : $"{utcTime:yyyy-MM-dd HH:mm:ss} ST";
-    }
-
-
-    private void RememberAutoDj(Models.DjScheduleEntry entry)
-    {
-        this.autoSawUsableDjSinceEnabled = true;
-        this.lastAutoDjOrderSeen = entry.Order;
-    }
-
-    private bool ShouldDisableAutoAfterLastDj(Configuration config, DateTime nextCandidateUtc)
-    {
-        if (!this.autoSawUsableDjSinceEnabled || !this.lastAutoDjOrderSeen.HasValue)
-            return false;
-
-        // The event-window scheduler returns DateTime.MaxValue when there is no
-        // future current-DJ or transition shout left. That is the only moment we
-        // should disable auto-shout automatically.
-        //
-        // Do not compare row order here. A future shout can legitimately point
-        // to the same row again when the repeat interval fires during a long DJ
-        // slot, and date-aware schedules can cross midnight without row numbers
-        // being a reliable lifecycle boundary.
-        return nextCandidateUtc == DateTime.MaxValue;
-    }
-
-    private void DisableAutoShoutAfterLastDj()
-    {
-        this.Configuration.AutoCurrentDjShoutEnabled = false;
-        this.Configuration.Save();
-        this.nextAutoCurrentDjShoutAtUtc = DateTime.MinValue;
-        this.previousAutoCurrentDjShoutEnabled = false;
-        this.autoSawUsableDjSinceEnabled = false;
-        this.lastAutoDjOrderSeen = null;
-        this.AutoShoutStatus = "Disabled after the last scheduled DJ.";
-    }
-
-    private static bool IsScheduledSlotStart(DateTime scheduledShoutAtUtc, Configuration.EventTimelineSlot slot)
-    {
-        return scheduledShoutAtUtc.Year == slot.StartUtc.Year &&
-               scheduledShoutAtUtc.Month == slot.StartUtc.Month &&
-               scheduledShoutAtUtc.Day == slot.StartUtc.Day &&
-               scheduledShoutAtUtc.Hour == slot.StartUtc.Hour &&
-               scheduledShoutAtUtc.Minute == slot.StartUtc.Minute;
-    }
-
-    private DateTime CalculateNextAutoShoutUtc(DateTime nowUtc)
-    {
-        var config = this.Configuration;
-        var interval = TimeSpan.FromMinutes(config.AutoCurrentDjShoutIntervalMinutes);
-        var candidates = new List<DateTime>();
-
-        foreach (var slot in config.BuildEventTimeline().Where(slot => slot.IsInsideEventWindow))
-        {
-            var candidate = CalculateNextOccurrenceInSlot(nowUtc, slot.StartUtc, slot.EndUtc, interval);
-            if (candidate.HasValue)
-                candidates.Add(candidate.Value);
-        }
-
-        return candidates.Count == 0 ? DateTime.MaxValue : candidates.Min();
-    }
-
-    private static DateTime? CalculateNextOccurrenceInSlot(DateTime nowUtc, DateTime slotStartUtc, DateTime slotEndUtc, TimeSpan interval)
-    {
-        if (nowUtc <= slotStartUtc)
-            return slotStartUtc;
-
-        if (nowUtc >= slotEndUtc)
-            return null;
-
-        var elapsedTicks = (nowUtc - slotStartUtc).Ticks;
-        var intervalTicks = interval.Ticks;
-        var steps = (elapsedTicks + intervalTicks - 1) / intervalTicks;
-        var candidate = slotStartUtc.AddTicks(steps * intervalTicks);
-
-        return candidate < slotEndUtc ? candidate : null;
+        this.DjAutoShoutService.Update();
+        this.StaffAutoShoutService.Update();
     }
 
     private void OnCommand(string command, string args)

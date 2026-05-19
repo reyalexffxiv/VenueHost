@@ -16,23 +16,50 @@ namespace VenueHost.Windows;
 /// </summary>
 public sealed class MainWindow : Window, IDisposable
 {
-    private readonly Plugin plugin;
+    private const float MainWindowWidth = 980f;
+    private const float MainWindowMinHeight = 900f;
+    private const float EventDetailsInputWidth = 180f;
+    private const float EventCommandInputWidth = 120f;
 
-    public MainWindow(Plugin plugin)
+    private readonly Configuration configuration;
+    private readonly IServiceContext services;
+
+    /// <summary>Shared plugin configuration used by this window.</summary>
+    private Configuration Configuration => this.configuration;
+
+    /// <summary>Shared service context used to resolve plugin services.</summary>
+    private IServiceContext Services => this.services;
+
+    /// <summary>UI helper service for cross-window actions and shared UI assets.</summary>
+    private UiService Ui => this.Services.Get<UiService>();
+
+    /// <summary>Macro expansion and chat queue helper service.</summary>
+    private ShoutService Shout => this.Services.Get<ShoutService>();
+
+    /// <summary>Automatic DJ shout scheduler and status provider.</summary>
+    private DjAutoShoutService DjAutoShout => this.Services.Get<DjAutoShoutService>();
+
+    /// <summary>Automatic staff role shout scheduler and status provider.</summary>
+    private StaffAutoShoutService StaffAutoShout => this.Services.Get<StaffAutoShoutService>();
+
+    public MainWindow(Configuration configuration, IServiceContext services)
         : base("Venue Host###VenueHostMain")
     {
-        this.plugin = plugin;
+        this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        this.services = services ?? throw new ArgumentNullException(nameof(services));
+        // Keep the operational layout stable horizontally while still allowing users
+        // to resize vertically for longer schedules and status panels.
         this.SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(920, 500),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
+            MinimumSize = new Vector2(MainWindowWidth, MainWindowMinHeight),
+            MaximumSize = new Vector2(MainWindowWidth, float.MaxValue),
         };
 
         this.TitleBarButtons.Add(new TitleBarButton
         {
             Icon = FontAwesomeIcon.Cog,
             ShowTooltip = () => ImGui.SetTooltip("Setup / Macros"),
-            Click = _ => this.plugin.ToggleConfigUi(),
+            Click = _ => this.Ui.ToggleConfigUi(),
             Priority = 10,
         });
     }
@@ -40,14 +67,44 @@ public sealed class MainWindow : Window, IDisposable
     private readonly Dictionary<int, string> djPickerSearchTextByOrder = new();
     private readonly Dictionary<int, string> djPickerQuickAddNameByOrder = new();
     private readonly Dictionary<int, string> djPickerQuickAddLinkByOrder = new();
+    private readonly Dictionary<int, string> staffPickerSearchTextByOrder = new();
 
     public void Dispose()
     {
     }
 
+    /// <summary>
+    /// Keeps the main operational window at the designed width and minimum height.
+    /// ImGui can restore a previously saved size before constraints are applied,
+    /// so this guards against horizontal stretch and too-short layouts without
+    /// disabling vertical expansion.
+    /// </summary>
+    private void EnforceMainWindowSize()
+    {
+        var currentSize = ImGui.GetWindowSize();
+        var targetHeight = Math.Max(currentSize.Y, MainWindowMinHeight);
+
+        if (Math.Abs(currentSize.X - MainWindowWidth) <= 0.5f &&
+            Math.Abs(currentSize.Y - targetHeight) <= 0.5f)
+        {
+            return;
+        }
+
+        ImGui.SetWindowSize(new Vector2(MainWindowWidth, targetHeight));
+    }
+
+    /// <summary>Refreshes automatic shout timers after schedule or settings edits.</summary>
+    private void RefreshAutoShoutSchedule()
+    {
+        this.DjAutoShout.Refresh();
+        this.StaffAutoShout.Refresh();
+    }
+
     public override void Draw()
     {
-        using var contrast = UiTheme.PushContrastIfEnabled(this.plugin.Configuration.ContrastModeEnabled);
+        this.EnforceMainWindowSize();
+
+        using var contrast = UiTheme.PushContrastIfEnabled(this.Configuration.ContrastModeEnabled);
 
         if (!ImGui.BeginTabBar("VenueHostTabs"))
             return;
@@ -57,12 +114,21 @@ public sealed class MainWindow : Window, IDisposable
             this.DrawDjLineupTab();
             ImGui.EndTabItem();
         }
+
+        if (ImGui.BeginTabItem("Staff Schedule"))
+        {
+            this.DrawStaffScheduleTab();
+            ImGui.EndTabItem();
+        }
+
         ImGui.EndTabBar();
+
+        this.DrawMascotCorner();
     }
 
     private void DrawDjLineupTab()
     {
-        var config = this.plugin.Configuration;
+        var config = this.Configuration;
         config.EnsureScheduleDefaults();
 
         ImGui.TextUnformatted("Event schedule");
@@ -85,10 +151,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled("Manual buttons use the selected row. Auto-shout follows the event window in ST/UTC.");
         ImGui.Spacing();
 
-        var tableHeight = Math.Min(330f, Math.Max(230f, ImGui.GetTextLineHeightWithSpacing() * 12f));
-        if (ImGui.BeginChild("DjScheduleScrollRegion", new Vector2(0, tableHeight), false, ImGuiWindowFlags.None))
-            this.DrawDjScheduleTable(config);
-        ImGui.EndChild();
+        this.DrawDjScheduleTableRegion(config);
 
         ImGui.Spacing();
         this.DrawScheduleButtons(config);
@@ -105,6 +168,722 @@ public sealed class MainWindow : Window, IDisposable
         this.DrawScheduleWarnings(config);
     }
 
+
+
+    private void DrawStaffScheduleTab()
+    {
+        var config = this.Configuration;
+        config.EnsureStaffScheduleDefaults();
+
+        this.DrawStaffScheduleWindow(config);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.TextUnformatted("Staff rows inside staff window (ST / UTC)");
+        ImGui.TextDisabled("Manual shouts use the selected role. Auto shouts follow each role interval inside the staff window.");
+        ImGui.Spacing();
+
+        this.DrawStaffScheduleTableRegion(config);
+
+        ImGui.Spacing();
+        this.DrawStaffScheduleButtons(config);
+        this.DrawClearStaffListConfirmation(config);
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        this.DrawStaffScheduleManualActions(config);
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        this.DrawStaffScheduleStatusPanel(config);
+    }
+
+
+    private const int NaturalScheduleRowLimit = 12;
+
+    private void DrawDjScheduleTableRegion(Configuration config)
+    {
+        if (config.DjSchedule.Count <= NaturalScheduleRowLimit)
+        {
+            this.DrawDjScheduleTable(config);
+            return;
+        }
+
+        var tableHeight = CalculateScheduleTableScrollHeight(NaturalScheduleRowLimit);
+        if (ImGui.BeginChild("DjScheduleScrollRegion", new Vector2(0, tableHeight), false, ImGuiWindowFlags.None))
+            this.DrawDjScheduleTable(config);
+        ImGui.EndChild();
+    }
+
+    private void DrawStaffScheduleTableRegion(Configuration config)
+    {
+        if (config.StaffSchedule.Count <= NaturalScheduleRowLimit)
+        {
+            this.DrawStaffScheduleTable(config);
+            return;
+        }
+
+        var tableHeight = CalculateScheduleTableScrollHeight(NaturalScheduleRowLimit);
+        if (ImGui.BeginChild("StaffScheduleScrollRegion", new Vector2(0, tableHeight), false, ImGuiWindowFlags.None))
+            this.DrawStaffScheduleTable(config);
+        ImGui.EndChild();
+    }
+
+    private static float CalculateScheduleTableScrollHeight(int visibleRows)
+    {
+        var rowHeight = Math.Max(24f, ImGui.GetTextLineHeightWithSpacing() + 7f);
+        var headerHeight = Math.Max(24f, ImGui.GetTextLineHeightWithSpacing() + 5f);
+        return headerHeight + (rowHeight * visibleRows) + 8f;
+    }
+
+    private void DrawStaffScheduleWindow(Configuration config)
+    {
+        config.EnsureStaffWindowDefaults();
+        var startX = ImGui.GetCursorPosX();
+        var endX = startX + 260f;
+
+        ImGui.TextUnformatted("Staff working window");
+        ImGui.Separator();
+        ImGui.TextDisabled("Staff Start");
+        ImGui.SameLine(endX);
+        ImGui.TextDisabled("Staff End");
+
+        this.DateInputAndSave("##StaffStartDate", config.StaffStartDate, v => config.StaffStartDate = v, 11);
+        ImGui.SameLine();
+        this.TimePickerAndSave("StaffStart", config.StaffStartTime, value => config.StaffStartTime = value);
+
+        ImGui.SameLine(endX);
+        this.DateInputAndSave("##StaffEndDate", config.StaffEndDate, v => config.StaffEndDate = v, 11);
+        ImGui.SameLine();
+        this.TimePickerAndSave("StaffEnd", config.StaffEndTime, value => config.StaffEndTime = value);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Use Event Window", new Vector2(135f, 24f), ButtonTone.Neutral) && config.TryGetEventWindow(out _, out _))
+        {
+            config.StaffStartDate = config.EventStartDate;
+            config.StaffStartTime = config.EventStartTime;
+            config.StaffEndDate = config.EventEndDate;
+            config.StaffEndTime = config.EventEndTime;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy the DJ/Event schedule window into the staff working window.");
+
+        ImGui.TextDisabled("Dates/times are ST / UTC. Staff row times are interpreted inside this staff window.");
+    }
+
+    private void DrawStaffScheduleTable(Configuration config)
+    {
+        // Keep the staff schedule compact. Unlike DJ rows, this table has no
+        // stream-link column, so letting it stretch across the full window makes the
+        // name column look oversized. Fixed column sizes also keep the header labels
+        // and row controls visually aligned.
+        const float tableWidth = 715f;
+        const float pickerColumnWidth = 28f;
+        const float staffColumnWidth = 235f;
+        const float roleColumnWidth = 145f;
+        const float timeColumnWidth = 108f;
+        // Give the Active column enough room for its centered header text.
+        // The checkbox remains compact, but the header should not truncate.
+        const float activeColumnWidth = 76f;
+
+        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.NoHostExtendX | ImGuiTableFlags.SizingFixedFit;
+        if (!ImGui.BeginTable("VenueHostStaffScheduleTable", 6, tableFlags, new Vector2(tableWidth, 0f)))
+            return;
+
+        ImGui.TableSetupColumn("##Picker", ImGuiTableColumnFlags.WidthFixed, pickerColumnWidth);
+        ImGui.TableSetupColumn("Staff Member", ImGuiTableColumnFlags.WidthFixed, staffColumnWidth);
+        ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthFixed, roleColumnWidth);
+        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthFixed, timeColumnWidth);
+        ImGui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed, timeColumnWidth);
+        ImGui.TableSetupColumn("Active", ImGuiTableColumnFlags.WidthFixed, activeColumnWidth);
+        DrawCenteredTableHeaders(string.Empty, "Staff Member", "Role", "Start", "End", "Active");
+
+        for (var i = 0; i < config.StaffSchedule.Count; i++)
+        {
+            var entry = config.StaffSchedule[i];
+            ImGui.PushID($"StaffScheduleRow{i}");
+            ImGui.TableNextRow();
+
+            var selected = config.SelectedStaffScheduleOrder == entry.Order;
+            if (selected)
+            {
+                var selectedColor = this.Configuration.ContrastModeEnabled
+                    ? new Vector4(0.42f, 0.00f, 0.34f, 0.42f)
+                    : new Vector4(0.16f, 0.32f, 0.52f, 0.22f);
+                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ToImGuiColor(selectedColor));
+            }
+
+            ImGui.TableNextColumn();
+            CenterNextItem(18f);
+            if (ImGui.RadioButton("##StaffScheduleRowSelect", selected))
+            {
+                config.SelectedStaffScheduleOrder = entry.Order;
+                config.Save();
+            }
+
+            ImGui.TableNextColumn();
+            this.StaffPickerAndSave(entry);
+
+            ImGui.TableNextColumn();
+            this.StaffRoleComboAndSave(entry);
+
+            ImGui.TableNextColumn();
+            this.TimePickerAndSave("StaffScheduleStart", entry.StartTime, value => entry.StartTime = value);
+
+            ImGui.TableNextColumn();
+            this.TimePickerAndSave("StaffScheduleEnd", entry.EndTime, value => entry.EndTime = value);
+
+            ImGui.TableNextColumn();
+            var available = entry.Available;
+            CenterNextItem(22f);
+            if (ImGui.Checkbox("##StaffScheduleAvailable", ref available))
+            {
+                config.SelectedStaffScheduleOrder = entry.Order;
+                entry.Available = available;
+                config.Save();
+                this.RefreshAutoShoutSchedule();
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Temporarily include or exclude this scheduled staff member from manual and auto shouts.");
+
+            ImGui.PopID();
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawStaffScheduleButtons(Configuration config)
+    {
+        if (this.ColoredButton("Add Staff", new Vector2(115, 28), ButtonTone.Positive))
+        {
+            var last = config.StaffSchedule.Count > 0 ? config.StaffSchedule[^1] : null;
+            var startTime = NormalizeTimeText(last?.EndTime ?? "18:00");
+            var duration = last is null ? 60 : GetReasonableDurationMinutes(last.StartTime, last.EndTime);
+            var endTime = AddMinutesToServerTime(startTime, duration);
+
+            config.StaffSchedule.Add(new StaffScheduleEntry
+            {
+                Order = config.StaffSchedule.Count + 1,
+                Name = string.Empty,
+                Role = config.SelectedStaffRole,
+                StartTime = startTime,
+                EndTime = endTime,
+                Available = true,
+            });
+            config.NormalizeStaffScheduleOrders();
+            config.SelectedStaffScheduleOrder = config.StaffSchedule[^1].Order;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Remove", new Vector2(90, 28), ButtonTone.Danger) && config.StaffSchedule.Count > 0)
+        {
+            config.StaffSchedule.RemoveAll(entry => entry.Order == config.SelectedStaffScheduleOrder);
+            config.NormalizeStaffScheduleOrders();
+            config.SelectedStaffScheduleOrder = config.StaffSchedule.Count == 0 ? 0 : Math.Clamp(config.SelectedStaffScheduleOrder, 1, config.StaffSchedule.Count);
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Move Up", new Vector2(100, 28), ButtonTone.Neutral))
+            this.MoveSelectedStaffScheduleEntry(config, -1);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Move Down", new Vector2(110, 28), ButtonTone.Neutral))
+            this.MoveSelectedStaffScheduleEntry(config, 1);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Staff Database", new Vector2(130, 28), ButtonTone.Primary))
+            this.Ui.ToggleStaffDatabaseUi();
+
+        // Keep the destructive clear action near the staff schedule controls.
+        // Right-aligning it made the compact staff table feel disconnected.
+        ImGui.SameLine();
+        if (this.ColoredButton("Clear List", new Vector2(130f, 28), ButtonTone.Warning))
+            this.showClearStaffListConfirmation = true;
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Clear all staff schedule rows after confirmation.");
+    }
+
+    private bool showClearStaffListConfirmation;
+
+    private void DrawClearStaffListConfirmation(Configuration config)
+    {
+        if (this.showClearStaffListConfirmation)
+        {
+            ImGui.OpenPopup("Clear staff schedule?##VenueHostClearStaffScheduleConfirm");
+            this.showClearStaffListConfirmation = false;
+        }
+
+        var windowPos = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+        var popupSize = new Vector2(455, 165);
+        ImGui.SetNextWindowSize(popupSize, ImGuiCond.Appearing);
+        ImGui.SetNextWindowPos(windowPos + (windowSize - popupSize) * 0.5f, ImGuiCond.Appearing);
+
+        var popupOpen = true;
+        if (!ImGui.BeginPopupModal("Clear staff schedule?##VenueHostClearStaffScheduleConfirm", ref popupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
+            return;
+
+        ImGui.TextWrapped("Clear the full staff schedule?");
+        ImGui.TextDisabled("This removes every staff row. Use Add Staff to start a new schedule.");
+        ImGui.Spacing();
+
+        if (this.ColoredButton("Yes, clear staff schedule##ConfirmClearStaffSchedule", new Vector2(205, 28), ButtonTone.Danger))
+        {
+            config.StaffSchedule.Clear();
+            config.SelectedStaffScheduleOrder = 0;
+            config.AutoPhotographerShoutEnabled = false;
+            foreach (var setting in config.StaffRoleShoutSettings)
+                setting.AutoEnabled = false;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+
+        if (this.ColoredButton("Cancel##CancelClearStaffSchedule", new Vector2(120, 28), ButtonTone.Neutral))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
+    }
+
+    private void DrawStaffScheduleManualActions(Configuration config)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var current = config.GetCurrentServerTimeStaffForRole(nowUtc, config.SelectedStaffRole);
+        var currentNames = FormatStaffNames(current);
+        var currentCount = CountUniqueStaffNames(current);
+        var selected = config.GetSelectedStaffScheduleEntry();
+
+        ImGui.TextUnformatted("Manual actions");
+        ImGui.TextDisabled("Role to shout");
+        ImGui.SetNextItemWidth(160f);
+        if (ImGui.BeginCombo("##StaffRoleToShout", config.SelectedStaffRole))
+        {
+            foreach (var role in GetKnownStaffRoles(config))
+            {
+                var isSelected = string.Equals(config.SelectedStaffRole, role, StringComparison.OrdinalIgnoreCase);
+                if (ImGui.Selectable(role, isSelected))
+                {
+                    config.SelectedStaffRole = role;
+                    config.Save();
+                }
+                if (isSelected)
+                    ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+
+        var roleSetting = config.GetOrCreateStaffRoleShoutSetting(config.SelectedStaffRole);
+        ImGui.Spacing();
+        ImGui.TextDisabled($"Quick auto settings for {roleSetting.Role}");
+
+        var autoEnabled = roleSetting.AutoEnabled;
+        if (ImGui.Checkbox("Auto shout enabled", ref autoEnabled))
+        {
+            roleSetting.AutoEnabled = autoEnabled;
+            if (roleSetting.Role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
+                config.AutoPhotographerShoutEnabled = autoEnabled;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+
+        var intervalMinutes = roleSetting.IntervalMinutes;
+        if (DrawIntStepper($"Interval##QuickStaffRoleInterval{roleSetting.Role}", ref intervalMinutes, 1, 120, 1, "min"))
+        {
+            roleSetting.IntervalMinutes = intervalMinutes;
+            if (roleSetting.Role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
+                config.AutoPhotographerShoutIntervalMinutes = intervalMinutes;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+
+        ImGui.TextDisabled($"Selected: {DisplayStaffMember(selected)} | Role: {config.SelectedStaffRole} | Current: {currentNames}");
+
+        if (currentCount == 0)
+            ImGui.BeginDisabled();
+
+        if (this.ColoredButton($"Shout {config.SelectedStaffRole}", new Vector2(230, 32), ButtonTone.Primary))
+            this.Shout.SendSelectedStaffRoleShout();
+
+        if (currentCount == 0)
+            ImGui.EndDisabled();
+
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(currentCount > 0 ? "Shout the selected role currently scheduled and marked Available." : GetNoCurrentStaffReason(config, nowUtc));
+    }
+
+    private void DrawStaffScheduleStatusPanel(Configuration config)
+    {
+        var serverNow = DateTime.UtcNow;
+        var current = config.GetCurrentServerTimeStaffForRole(serverNow, config.SelectedStaffRole);
+        var currentText = FormatStaffNames(current);
+        var nextAutoAt = this.StaffAutoShout.GetNextShoutAtUtc(this.Configuration.SelectedStaffRole);
+        var nextAutoText = nextAutoAt.HasValue ? FormatStatusTime(nextAutoAt.Value, includeSeconds: true) : "none";
+        var staffWindowText = config.TryGetStaffWindow(out var staffStartUtc, out var staffEndUtc)
+            ? $"{staffStartUtc:yyyy-MM-dd HH:mm} → {staffEndUtc:yyyy-MM-dd HH:mm} ST"
+            : "invalid";
+
+        ImGui.TextUnformatted("Auto shouts");
+
+        var availableWidth = ImGui.GetContentRegionAvail().X;
+        var leftWidth = MathF.Min(460f, availableWidth * 0.55f);
+        var rightWidth = MathF.Max(300f, availableWidth - leftWidth - 18f);
+
+        ImGui.BeginGroup();
+        if (ImGui.BeginTable("VenueHostStaffScheduleStatusPanel", 2, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 175f);
+            ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
+            this.DrawStatusRow("Auto Staff Shouts", config.IsAnyStaffAutoShoutEnabled() ? "ON" : "OFF");
+            this.DrawStatusRow("Server Time", $"{serverNow:yyyy-MM-dd HH:mm:ss} ST / UTC");
+            this.DrawStatusRow("Staff Window", staffWindowText);
+            this.DrawStatusRow("Selected Role", config.SelectedStaffRole);
+            this.DrawStatusRow("Current Staff", currentText);
+            this.DrawStatusRow("Next Staff Shout", nextAutoText);
+            this.DrawStatusRow("Next Shout Type", nextAutoAt.HasValue ? $"{config.SelectedStaffRole} shout" : "none");
+            ImGui.EndTable();
+        }
+        ImGui.EndGroup();
+
+        if (availableWidth > 760f)
+        {
+            ImGui.SameLine(0f, 18f);
+            ImGui.BeginGroup();
+            this.DrawStaffAutoShoutSequence(config, serverNow, rightWidth);
+            ImGui.EndGroup();
+        }
+        else
+        {
+            ImGui.Spacing();
+            this.DrawStaffAutoShoutSequence(config, serverNow, availableWidth);
+        }
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Schedule check");
+        foreach (var line in GetStaffScheduleCheckLines(config, serverNow))
+            ImGui.TextDisabled(line);
+    }
+
+    private void DrawStaffAutoShoutSequence(Configuration config, DateTime nowUtc, float width)
+    {
+        ImGui.TextUnformatted("Upcoming role shouts");
+
+        var rows = this.BuildStaffAutoShoutSequenceRows(nowUtc).Take(6).ToList();
+        if (rows.Count == 0)
+        {
+            ImGui.TextDisabled("No automatic role shouts queued.");
+            return;
+        }
+
+        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(4f, 2f));
+        if (ImGui.BeginTable(
+                "VenueHostStaffAutoShoutSequence",
+                3,
+                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoHostExtendX,
+                new Vector2(MathF.Min(width, 520f), 0f)))
+        {
+            ImGui.TableSetupColumn("Time", ImGuiTableColumnFlags.WidthFixed, 72f);
+            ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthFixed, 130f);
+            ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 190f);
+            ImGui.TableHeadersRow();
+
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var row = rows[index];
+                ImGui.TableNextRow();
+                if (index == 0)
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(ImGuiCol.Header));
+
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.TimeText);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Role);
+                ImGui.TableNextColumn();
+                if (index == 0)
+                    ImGui.TextUnformatted(row.Status);
+                else
+                    ImGui.TextDisabled(row.Status);
+            }
+
+            ImGui.EndTable();
+        }
+        ImGui.PopStyleVar();
+
+        if (config.AutoStaffRoleShoutStaggerEnabled)
+            ImGui.TextDisabled($"Queue spacing: {config.AutoStaffRoleShoutStaggerMinutes} min between role shouts.");
+        else
+            ImGui.TextDisabled("Queue spacing: disabled, due roles may shout together.");
+    }
+
+    private List<(DateTime DisplayTimeUtc, string TimeText, string Role, string Status)> BuildStaffAutoShoutSequenceRows(DateTime nowUtc)
+    {
+        return this.StaffAutoShout.GetUpcomingRoleShouts(nowUtc, maxRows: 6)
+            .Select(row => (row.DisplayTimeUtc, $"{row.DisplayTimeUtc:HH:mm:ss}", row.Role, row.Status))
+            .ToList();
+    }
+
+    private static string StripImGuiId(string label)
+    {
+        var markerIndex = label.IndexOf("##", StringComparison.Ordinal);
+        return markerIndex >= 0 ? label[..markerIndex] : label;
+    }
+
+    private static bool DrawIntStepper(string label, ref int value, int min, int max, int step, string suffix)
+    {
+        var changed = false;
+        var inputValue = value;
+        var displayLabel = StripImGuiId(label);
+
+        ImGui.PushID(label);
+        ImGui.SetNextItemWidth(70);
+        if (ImGui.InputInt("##value", ref inputValue, 0, 0))
+        {
+            value = Math.Clamp(inputValue, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("-", new Vector2(28, 0)))
+        {
+            value = Math.Clamp(value - step, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("+", new Vector2(28, 0)))
+        {
+            value = Math.Clamp(value + step, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        ImGui.TextUnformatted($"{displayLabel} ({suffix})");
+        ImGui.PopID();
+
+        return changed;
+    }
+
+    private void StaffPickerAndSave(StaffScheduleEntry entry)
+    {
+        var displayName = string.IsNullOrWhiteSpace(entry.Name) ? "Pick Staff..." : entry.Name;
+        ImGui.SetNextItemWidth(-1);
+
+        if (ImGui.Button($"{displayName}##StaffPickerButton", new Vector2(-1, 0)))
+        {
+            this.Configuration.SelectedStaffScheduleOrder = entry.Order;
+            this.staffPickerSearchTextByOrder[entry.Order] = string.Empty;
+            this.Configuration.Save();
+            ImGui.OpenPopup("StaffPickerPopup");
+        }
+
+        if (!ImGui.BeginPopup("StaffPickerPopup"))
+            return;
+
+        ImGui.TextUnformatted("Pick Staff from Staff Database");
+        ImGui.TextDisabled("Pick any saved staff member. Their role is copied into the schedule row.");
+        ImGui.Separator();
+
+        if (!this.staffPickerSearchTextByOrder.TryGetValue(entry.Order, out var searchText))
+            searchText = string.Empty;
+
+        ImGui.SetNextItemWidth(260f);
+        if (ImGui.InputText("Search##StaffPickerSearch", ref searchText, 80))
+            this.staffPickerSearchTextByOrder[entry.Order] = searchText;
+
+        var matches = this.Configuration.StaffDatabase
+            .Where(staff => MatchesStaffSearch(staff, searchText))
+            .OrderBy(staff => staff.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        ImGui.Spacing();
+        if (matches.Count == 0)
+        {
+            ImGui.TextDisabled("No staff found in Staff Database.");
+        }
+        else if (ImGui.BeginChild("StaffPickerResults", new Vector2(430, Math.Min(matches.Count, 8) * 28f + 8f), true, ImGuiWindowFlags.None))
+        {
+            for (var i = 0; i < matches.Count; i++)
+            {
+                var staff = matches[i];
+                var label = $"{staff.Name}  —  {staff.Role}";
+                if (ImGui.Selectable($"{label}##PickStaff{i}"))
+                {
+                    entry.Name = staff.Name;
+                    entry.Link = string.Empty;
+                    entry.Role = string.IsNullOrWhiteSpace(staff.Role) ? entry.Role : this.Configuration.GetExistingOrDefaultStaffRole(staff.Role);
+                    this.Configuration.Save();
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+
+            ImGui.EndChild();
+        }
+
+        ImGui.Spacing();
+        if (ImGui.Button("Open Staff Database", new Vector2(160, 24)))
+            this.Ui.ToggleStaffDatabaseUi();
+        ImGui.SameLine();
+        if (ImGui.Button("Close", new Vector2(80, 24)))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
+    }
+
+
+    private void StaffRoleComboAndSave(StaffScheduleEntry entry)
+    {
+        var currentRole = string.IsNullOrWhiteSpace(entry.Role) ? "Photographer" : entry.Role;
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo("##StaffRole", currentRole))
+            return;
+
+        foreach (var role in GetKnownStaffRoles(this.Configuration))
+        {
+            var selected = string.Equals(currentRole, role, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(role, selected))
+            {
+                this.Configuration.SelectedStaffScheduleOrder = entry.Order;
+                entry.Role = role;
+                this.Configuration.Save();
+                this.RefreshAutoShoutSchedule();
+            }
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private static IReadOnlyList<string> GetKnownStaffRoles(Configuration config) => config.GetKnownStaffRoles();
+
+    private void MoveSelectedStaffScheduleEntry(Configuration config, int direction)
+    {
+        var currentIndex = config.StaffSchedule.FindIndex(entry => entry.Order == config.SelectedStaffScheduleOrder);
+        var targetIndex = currentIndex + direction;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= config.StaffSchedule.Count)
+            return;
+
+        (config.StaffSchedule[currentIndex], config.StaffSchedule[targetIndex]) = (config.StaffSchedule[targetIndex], config.StaffSchedule[currentIndex]);
+        config.NormalizeStaffScheduleOrders();
+        config.SelectedStaffScheduleOrder = targetIndex + 1;
+        config.Save();
+        this.RefreshAutoShoutSchedule();
+    }
+
+    private static bool MatchesStaffSearch(StaffDatabaseEntry entry, string searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+            return true;
+
+        return (entry.Name?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false) ||
+               (entry.Role?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private static string DisplayStaffMember(StaffScheduleEntry? entry)
+    {
+        if (entry is null)
+            return "none";
+
+        return string.IsNullOrWhiteSpace(entry.Name) ? "unnamed staff row" : entry.Name;
+    }
+
+    private static string DisplayStaffMemberWithRow(StaffScheduleEntry entry)
+    {
+        return string.IsNullOrWhiteSpace(entry.Name) ? $"row {entry.Order}" : $"{entry.Name}, row {entry.Order}";
+    }
+
+    private static IReadOnlyList<string> GetUniqueStaffNames(IEnumerable<StaffScheduleEntry> staffEntries)
+    {
+        return staffEntries
+            .Select(entry => entry.Name?.Trim() ?? string.Empty)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static int CountUniqueStaffNames(IEnumerable<StaffScheduleEntry> staffEntries)
+    {
+        return GetUniqueStaffNames(staffEntries).Count;
+    }
+
+    private static string FormatStaffNames(IEnumerable<StaffScheduleEntry> staffEntries)
+    {
+        var names = GetUniqueStaffNames(staffEntries);
+        return names.Count == 0 ? "none active now" : string.Join(", ", names);
+    }
+
+    private static string GetNoCurrentStaffReason(Configuration config, DateTime utcNow)
+    {
+        var scheduledNow = config.BuildStaffScheduleTimeline()
+            .Where(slot => slot.IsInsideEventWindow && utcNow >= slot.StartUtc && utcNow < slot.EndUtc)
+            .Select(slot => slot.Entry)
+            .ToList();
+
+        if (scheduledNow.Count == 0)
+            return $"Disabled because no {config.SelectedStaffRole.ToLowerInvariant()} staff is scheduled right now.";
+
+        if (scheduledNow.All(entry => !entry.Available))
+            return "Disabled because scheduled staff are not marked Active.";
+
+        return "Disabled because no usable staff name is active right now.";
+    }
+
+    private static IReadOnlyList<string> GetStaffScheduleCheckLines(Configuration config, DateTime utcNow)
+    {
+        if (config.StaffSchedule.Count == 0)
+            return new[] { "No staff rows added yet." };
+
+        var timeline = config.BuildStaffScheduleTimeline();
+        var activeAll = timeline
+            .Where(slot => slot.IsInsideEventWindow && utcNow >= slot.StartUtc && utcNow < slot.EndUtc)
+            .Select(slot => slot.Entry)
+            .ToList();
+        var activeAvailable = activeAll.Where(entry => entry.Available).ToList();
+        var uniqueAvailable = GetUniqueStaffNames(activeAvailable);
+
+        var lines = new List<string>();
+        var emptyRows = config.StaffSchedule.Count(entry => string.IsNullOrWhiteSpace(entry.Name));
+        var outsideRows = timeline.Count(slot => !slot.IsInsideEventWindow);
+        var duplicateActive = activeAvailable
+            .GroupBy(entry => entry.Name?.Trim() ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key) && group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+
+        if (duplicateActive.Count > 0)
+            lines.Add($"Warning: {string.Join(", ", duplicateActive)} appears more than once in the current staff schedule.");
+
+        if (outsideRows > 0)
+            lines.Add($"Warning: {outsideRows} staff row(s) are outside the staff window.");
+
+        if (activeAll.Count > 0 && activeAvailable.Count == 0)
+            lines.Add("Staff are scheduled now, but none are marked Active.");
+        else if (uniqueAvailable.Count > 0)
+            lines.Add($"{uniqueAvailable.Count} staff member(s) active now.");
+        else
+            lines.Add("No staff active now.");
+
+        if (emptyRows > 0)
+            lines.Add($"{emptyRows} row(s) still need a staff name.");
+
+        if (lines.Count == 1 && lines[0] == "No staff active now." && emptyRows == 0 && outsideRows == 0 && duplicateActive.Count == 0)
+            return new[] { "Schedule looks good." };
+
+        return lines;
+    }
 
     private void DrawEventSchedule(Configuration config)
     {
@@ -143,16 +922,16 @@ public sealed class MainWindow : Window, IDisposable
         if (!ImGui.BeginTable("VenueHostEventDetails", 2, ImGuiTableFlags.SizingStretchProp))
             return;
 
-        var labelColumnWidth = this.plugin.Configuration.ContrastModeEnabled ? 140f : 105f;
+        var labelColumnWidth = this.Configuration.ContrastModeEnabled ? 140f : 105f;
         ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, labelColumnWidth);
         ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
 
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted("Venue:");
+        ImGui.TextUnformatted("Venue");
         ImGui.TableNextColumn();
-        this.InputAndSave("##VenueName", config.VenueName, v => config.VenueName = v, 160);
+        this.InputAndSave("##VenueName", config.VenueName, v => config.VenueName = v, 160, EventDetailsInputWidth);
 
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
@@ -167,7 +946,7 @@ public sealed class MainWindow : Window, IDisposable
         if (!config.GiveawayEnabled)
             ImGui.BeginDisabled();
 
-        this.InputAndSave("##GiveawayText", config.GiveawayText, v => config.GiveawayText = v, 220);
+        this.InputAndSave("##GiveawayText", config.GiveawayText, v => config.GiveawayText = v, 220, EventDetailsInputWidth);
 
         if (!config.GiveawayEnabled)
             ImGui.EndDisabled();
@@ -193,7 +972,7 @@ public sealed class MainWindow : Window, IDisposable
         if (!config.GiveawayEnabled || !config.GiveawayCommandEnabled)
             ImGui.BeginDisabled();
 
-        this.InputAndSave("##GiveawayCommand", config.GiveawayCommand, v => config.GiveawayCommand = v, 80);
+        this.InputAndSave("##GiveawayCommand", config.GiveawayCommand, v => config.GiveawayCommand = v, 80, EventCommandInputWidth);
 
         if (!config.GiveawayEnabled || !config.GiveawayCommandEnabled)
             ImGui.EndDisabled();
@@ -205,16 +984,20 @@ public sealed class MainWindow : Window, IDisposable
     {
         var warningRows = GetScheduleWarningRows(config);
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable | ImGuiTableFlags.SizingStretchProp;
-        if (!ImGui.BeginTable("VenueHostDjSchedule", 6, tableFlags))
+        // Use a versioned table ID so changed default widths are not masked by
+        // ImGui's persisted column layout from older builds.
+        if (!ImGui.BeginTable("VenueHostDjScheduleV2", 6, tableFlags))
             return;
 
         ImGui.TableSetupColumn("Order", ImGuiTableColumnFlags.WidthFixed, 58f);
         ImGui.TableSetupColumn("DJ", ImGuiTableColumnFlags.WidthStretch, 1.1f);
         ImGui.TableSetupColumn("Link", ImGuiTableColumnFlags.WidthStretch, 2.2f);
-        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthFixed, 125f);
-        ImGui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed, 125f);
+        // Keep per-DJ time columns tight; these rows repeat often, so a compact
+        // picker keeps DJ/link information from being squeezed unnecessarily.
+        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 78f);
+        ImGui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 78f);
         ImGui.TableSetupColumn("Giveaway", ImGuiTableColumnFlags.WidthFixed, 72f);
-        ImGui.TableHeadersRow();
+        DrawCenteredTableHeaders("Order", "DJ", "Link", "Start", "End", "Giveaway");
 
         for (var i = 0; i < config.DjSchedule.Count; i++)
         {
@@ -225,7 +1008,7 @@ public sealed class MainWindow : Window, IDisposable
             var selected = config.SelectedDjOrder == entry.Order;
             if (selected)
             {
-                var selectedColor = this.plugin.Configuration.ContrastModeEnabled
+                var selectedColor = this.Configuration.ContrastModeEnabled
                     ? new Vector4(0.42f, 0.00f, 0.34f, 0.42f)
                     : new Vector4(0.16f, 0.32f, 0.52f, 0.22f);
                 ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ToImGuiColor(selectedColor));
@@ -234,7 +1017,7 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.TableNextColumn();
             if (hasWarning)
             {
-                var warningColor = this.plugin.Configuration.ContrastModeEnabled
+                var warningColor = this.Configuration.ContrastModeEnabled
                     ? new Vector4(1.00f, 0.95f, 0.00f, 0.35f)
                     : new Vector4(0.70f, 0.42f, 0.12f, 0.26f);
                 ImGui.TableSetBgColor(ImGuiTableBgTarget.CellBg, ToImGuiColor(warningColor));
@@ -253,10 +1036,12 @@ public sealed class MainWindow : Window, IDisposable
             this.DrawLinkCell(entry);
 
             ImGui.TableNextColumn();
-            this.TimePickerAndSave("Start", entry.StartTime, value => entry.StartTime = value);
+            CenterNextItem(70f);
+            this.TimePickerAndSave("Start", entry.StartTime, value => entry.StartTime = value, width: 70f);
 
             ImGui.TableNextColumn();
-            this.TimePickerAndSave("End", entry.EndTime, value => entry.EndTime = value);
+            CenterNextItem(70f);
+            this.TimePickerAndSave("End", entry.EndTime, value => entry.EndTime = value, width: 70f);
 
             ImGui.TableNextColumn();
             var giveawayEnabled = entry.GiveawayEnabled;
@@ -298,7 +1083,7 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         var canOpen = IsHttpLink(link);
-        var displayLink = TrimTextToWidth(link, ImGui.GetContentRegionAvail().X);
+        var displayLink = TrimTextToWidth(GetCompactDisplayLink(link), ImGui.GetContentRegionAvail().X);
 
         if (!canOpen)
         {
@@ -311,7 +1096,7 @@ public sealed class MainWindow : Window, IDisposable
             return;
         }
 
-        var linkColor = this.plugin.Configuration.ContrastModeEnabled
+        var linkColor = this.Configuration.ContrastModeEnabled
             ? new Vector4(0.00f, 1.00f, 0.95f, 1.00f)
             : new Vector4(0.35f, 0.65f, 1.00f, 1.00f);
 
@@ -329,6 +1114,20 @@ public sealed class MainWindow : Window, IDisposable
         {
             OpenExternalLink(link);
         }
+    }
+
+
+    private static string GetCompactDisplayLink(string link)
+    {
+        if (!Uri.TryCreate(link, UriKind.Absolute, out var uri))
+            return link;
+
+        var host = uri.Host;
+        if (host.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
+            host = host[4..];
+
+        var path = uri.AbsolutePath.Trim('/');
+        return string.IsNullOrWhiteSpace(path) ? host : $"{host}/{path}";
     }
 
     private static string TrimTextToWidth(string text, float maxWidth)
@@ -401,7 +1200,7 @@ public sealed class MainWindow : Window, IDisposable
                 config.AutoCurrentDjShoutEnabled = true;
 
             config.Save();
-            this.plugin.RefreshAutoShoutSchedule();
+            this.RefreshAutoShoutSchedule();
         }
 
         ImGui.SameLine();
@@ -427,7 +1226,7 @@ public sealed class MainWindow : Window, IDisposable
             }
 
             config.Save();
-            this.plugin.RefreshAutoShoutSchedule();
+            this.RefreshAutoShoutSchedule();
         }
 
         ImGui.SameLine();
@@ -451,7 +1250,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.SameLine();
 
         if (this.ColoredButton("DJ Database", new Vector2(120, 28), ButtonTone.Primary))
-            this.plugin.ToggleDjDatabaseUi();
+            this.Ui.ToggleDjDatabaseUi();
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Open saved DJ names and stream links.");
@@ -501,7 +1300,7 @@ public sealed class MainWindow : Window, IDisposable
             config.SelectedDjOrder = 0;
             config.AutoCurrentDjShoutEnabled = false;
             config.Save();
-            this.plugin.RefreshAutoShoutSchedule();
+            this.RefreshAutoShoutSchedule();
             ImGui.CloseCurrentPopup();
         }
 
@@ -536,7 +1335,7 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         config.Save();
-        this.plugin.RefreshAutoShoutSchedule();
+        this.RefreshAutoShoutSchedule();
     }
 
     private void MoveSelected(Configuration config, int direction)
@@ -550,7 +1349,7 @@ public sealed class MainWindow : Window, IDisposable
         config.NormalizeScheduleOrders();
         config.SelectedDjOrder = targetIndex + 1;
         config.Save();
-        this.plugin.RefreshAutoShoutSchedule();
+        this.RefreshAutoShoutSchedule();
     }
 
 
@@ -573,7 +1372,7 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.BeginDisabled();
 
         if (this.ColoredButton("Shout Current DJ", new Vector2(210, 32), ButtonTone.Primary))
-            this.plugin.SendCurrentDjShout();
+            this.Shout.SendCurrentDjShout();
 
         if (!hasSelectedDj)
             ImGui.EndDisabled();
@@ -584,7 +1383,7 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.BeginDisabled();
 
         if (this.ColoredButton("Thank Current / Welcome Next", new Vector2(270, 32), ButtonTone.Primary))
-            this.plugin.SendTransitionShout();
+            this.Shout.SendTransitionShout();
 
         if (!hasSelectedDj || !hasNextDj)
             ImGui.EndDisabled();
@@ -598,39 +1397,50 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.BeginDisabled();
 
         if (this.ColoredButton("Tell DJ to Target", new Vector2(230, 32), ButtonTone.Positive))
-            this.plugin.TellCurrentDjToTarget();
+            this.Shout.TellCurrentDjToTarget();
 
         if (!hasSelectedDj)
             ImGui.EndDisabled();
 
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(hasSelectedDj ? "Sends the selected DJ info to your current target using /tell <t>." : "Disabled because the selected row has no DJ yet.");
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Quick auto settings");
+
+        var autoEnabled = config.AutoCurrentDjShoutEnabled;
+        if (ImGui.Checkbox("Enable automatic DJ shouts", ref autoEnabled))
+        {
+            config.AutoCurrentDjShoutEnabled = autoEnabled;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
+
+        var intervalMinutes = config.AutoCurrentDjShoutIntervalMinutes;
+        if (DrawIntStepper("Auto DJ shout interval##QuickDjAutoInterval", ref intervalMinutes, 1, 120, 1, "min"))
+        {
+            config.AutoCurrentDjShoutIntervalMinutes = intervalMinutes;
+            config.Save();
+            this.RefreshAutoShoutSchedule();
+        }
     }
 
     private void DrawStatusPanel(Configuration config)
     {
         var serverNow = DateTime.UtcNow;
         var scheduledCurrent = config.GetCurrentServerTimeDj(serverNow);
-        var nextAutoAt = this.plugin.NextAutoShoutAtUtc;
+        var nextAutoAt = this.DjAutoShout.NextShoutAtUtc;
         var nextAutoText = nextAutoAt.HasValue ? FormatStatusTime(nextAutoAt.Value, includeSeconds: true) : "none";
         var nextAutoDj = nextAutoAt.HasValue ? config.GetCurrentServerTimeDj(nextAutoAt.Value) : null;
         var autoDjText = scheduledCurrent is null ? "none active now" : DisplayDjWithRow(scheduledCurrent);
         var currentSlot = scheduledCurrent is null ? null : config.GetTimelineSlotForEntry(scheduledCurrent);
         var currentSlotText = currentSlot is null ? "none" : FormatStatusRange(currentSlot.StartUtc, currentSlot.EndUtc);
-        var eventWindowText = config.TryGetEventWindow(out var eventStartUtc, out var eventEndUtc)
-            ? $"{eventStartUtc:yyyy-MM-dd HH:mm} → {eventEndUtc:yyyy-MM-dd HH:mm} ST"
+        var staffWindowText = config.TryGetStaffWindow(out var staffStartUtc, out var staffEndUtc)
+            ? $"{staffStartUtc:yyyy-MM-dd HH:mm} → {staffEndUtc:yyyy-MM-dd HH:mm} ST"
             : "invalid";
         var nextTransitionText = GetNextTransitionText(config, scheduledCurrent);
 
         ImGui.TextUnformatted("Auto schedule");
-        if (!ImGui.BeginTable("VenueHostAutoScheduleLayout", 2, ImGuiTableFlags.SizingStretchProp))
-            return;
-
-        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 470f);
-        ImGui.TableSetupColumn("Mascot", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableNextRow();
-        ImGui.TableNextColumn();
-
         if (ImGui.BeginTable("VenueHostStatusPanel", 2, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 135f);
@@ -638,28 +1448,22 @@ public sealed class MainWindow : Window, IDisposable
 
             this.DrawStatusRow("Auto Shout", config.AutoCurrentDjShoutEnabled ? "ON" : "OFF");
             this.DrawStatusRow("Server Time", $"{serverNow:yyyy-MM-dd HH:mm:ss} ST / UTC");
-            this.DrawStatusRow("Event Window", eventWindowText);
             this.DrawStatusRow("Auto DJ", autoDjText);
             this.DrawStatusRow("Current Slot", currentSlotText);
             if (scheduledCurrent is null && nextAutoDj is not null)
                 this.DrawStatusRow("Next DJ", $"{DisplayDjWithRow(nextAutoDj)} at {nextAutoText}");
             this.DrawStatusRow("Next Transition", nextTransitionText);
             this.DrawStatusRow("Next Shout", nextAutoText);
-            this.DrawStatusRow("Next Shout Type", this.plugin.GetNextAutoShoutTypeDescription());
+            this.DrawStatusRow("Next Shout Type", this.DjAutoShout.GetNextShoutTypeDescription());
 
             ImGui.EndTable();
         }
-
-        ImGui.TableNextColumn();
-        this.DrawMascotDecoration();
-
-        ImGui.EndTable();
     }
 
 
-    private void DrawMascotDecoration()
+    private void DrawMascotCorner()
     {
-        var texture = this.plugin.MascotTexture;
+        var texture = this.Ui.MascotTexture;
         if (texture is null)
             return;
 
@@ -667,20 +1471,24 @@ public sealed class MainWindow : Window, IDisposable
         if (wrap is null)
             return;
 
-        var available = ImGui.GetContentRegionAvail();
-        if (available.X < 170f || available.Y < 150f)
+        var windowSize = ImGui.GetWindowSize();
+        if (windowSize.X < 760f || windowSize.Y < 560f)
             return;
 
-        // Decorative mascot, intentionally small so it does not steal focus from the live schedule.
-        // It is placed in the empty status-panel space, lower and closer to center than the first pass.
+        // Keep the mascot decorative and predictable: anchored to the bottom-right
+        // corner of the main window, away from tables and action buttons. Drawing it
+        // directly on the window draw list avoids taking layout space from the UI.
         const float mascotSize = 90f;
-        var size = new Vector2(mascotSize, mascotSize);
-        var start = ImGui.GetCursorScreenPos();
-        var x = start.X + Math.Max(0f, (available.X - size.X) * 0.42f);
-        var y = start.Y + 72f;
+        const float rightPadding = 36f;
+        const float bottomPadding = 34f;
 
-        ImGui.SetCursorScreenPos(new Vector2(x, y));
-        ImGui.Image(wrap.Handle, size);
+        var windowPos = ImGui.GetWindowPos();
+        var imageMin = new Vector2(
+            windowPos.X + windowSize.X - rightPadding - mascotSize,
+            windowPos.Y + windowSize.Y - bottomPadding - mascotSize);
+        var imageMax = imageMin + new Vector2(mascotSize, mascotSize);
+
+        ImGui.GetWindowDrawList().AddImage(wrap.Handle, imageMin, imageMax);
     }
 
     private void DrawStatusRow(string label, string value)
@@ -788,6 +1596,24 @@ public sealed class MainWindow : Window, IDisposable
         return rows;
     }
 
+
+    private static void DrawCenteredTableHeaders(params string[] labels)
+    {
+        ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
+
+        for (var column = 0; column < labels.Length; column++)
+        {
+            ImGui.TableSetColumnIndex(column);
+            var label = labels[column];
+            if (string.IsNullOrEmpty(label))
+                continue;
+
+            var textWidth = ImGui.CalcTextSize(label).X;
+            CenterNextItem(textWidth);
+            ImGui.TableHeader(label);
+        }
+    }
+
     private static void CenterNextItem(float itemWidth)
     {
         var availableWidth = ImGui.GetContentRegionAvail().X;
@@ -807,7 +1633,7 @@ public sealed class MainWindow : Window, IDisposable
     private bool ColoredButton(string label, Vector2 size, ButtonTone tone)
     {
         var (normal, hovered, active) = GetButtonColors(tone);
-        var contrast = this.plugin.Configuration.ContrastModeEnabled;
+        var contrast = this.Configuration.ContrastModeEnabled;
         ImGui.PushStyleColor(ImGuiCol.Button, normal);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, hovered);
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, active);
@@ -836,7 +1662,7 @@ public sealed class MainWindow : Window, IDisposable
 
     private (Vector4 Normal, Vector4 Hovered, Vector4 Active) GetButtonColors(ButtonTone tone)
     {
-        if (this.plugin.Configuration.ContrastModeEnabled)
+        if (this.Configuration.ContrastModeEnabled)
         {
             return tone switch
             {
@@ -912,9 +1738,9 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.Spacing();
 
-        this.plugin.Configuration.NormalizeDjDatabase();
+        this.Configuration.NormalizeDjDatabase();
 
-        var matches = this.plugin.Configuration.DjDatabase
+        var matches = this.Configuration.DjDatabase
             .Where(dbEntry => MatchesDjSearch(dbEntry, searchText))
             .OrderBy(dbEntry => dbEntry.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -937,12 +1763,12 @@ public sealed class MainWindow : Window, IDisposable
 
                     if (ImGui.Selectable($"{label}##Pick{matchIndex}"))
                     {
-                        var hadUsableDjBefore = this.plugin.Configuration.DjSchedule.Any(Configuration.HasUsableDj);
+                        var hadUsableDjBefore = this.Configuration.DjSchedule.Any(Configuration.HasUsableDj);
                         entry.DJName = dbEntry.Name;
                         entry.DJLink = dbEntry.Link;
                         this.EnableAutoShoutWhenFirstDjIsAdded(hadUsableDjBefore);
-                        this.plugin.Configuration.Save();
-                        this.plugin.RefreshAutoShoutSchedule();
+                        this.Configuration.Save();
+                        this.RefreshAutoShoutSchedule();
                         ImGui.CloseCurrentPopup();
                     }
                 }
@@ -980,7 +1806,7 @@ public sealed class MainWindow : Window, IDisposable
         {
             var requestedName = (quickName ?? string.Empty).Trim();
             var requestedLink = (quickLink ?? string.Empty).Trim();
-            var existingEntry = this.plugin.Configuration.DjDatabase.FirstOrDefault(dbEntry =>
+            var existingEntry = this.Configuration.DjDatabase.FirstOrDefault(dbEntry =>
                 string.Equals((dbEntry.Name ?? string.Empty).Trim(), requestedName, StringComparison.OrdinalIgnoreCase));
 
             string nameToSave;
@@ -996,24 +1822,24 @@ public sealed class MainWindow : Window, IDisposable
             }
             else
             {
-                nameToSave = this.plugin.Configuration.GetUniqueDjDatabaseName(requestedName);
+                nameToSave = this.Configuration.GetUniqueDjDatabaseName(requestedName);
                 linkToSave = requestedLink;
 
-                this.plugin.Configuration.DjDatabase.Add(new DjDatabaseEntry
+                this.Configuration.DjDatabase.Add(new DjDatabaseEntry
                 {
                     Name = nameToSave,
                     Link = linkToSave,
                 });
             }
 
-            this.plugin.Configuration.NormalizeDjDatabase();
+            this.Configuration.NormalizeDjDatabase();
 
-            var hadUsableDjBefore = this.plugin.Configuration.DjSchedule.Any(Configuration.HasUsableDj);
+            var hadUsableDjBefore = this.Configuration.DjSchedule.Any(Configuration.HasUsableDj);
             entry.DJName = nameToSave;
             entry.DJLink = linkToSave;
             this.EnableAutoShoutWhenFirstDjIsAdded(hadUsableDjBefore);
-            this.plugin.Configuration.Save();
-            this.plugin.RefreshAutoShoutSchedule();
+            this.Configuration.Save();
+            this.RefreshAutoShoutSchedule();
 
             this.djPickerQuickAddNameByOrder[entry.Order] = string.Empty;
             this.djPickerQuickAddLinkByOrder[entry.Order] = string.Empty;
@@ -1026,7 +1852,7 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.SameLine();
         if (ImGui.Button("Open DJ Database", new Vector2(140, 24)))
-            this.plugin.ToggleDjDatabaseUi();
+            this.Ui.ToggleDjDatabaseUi();
 
         ImGui.SameLine();
         if (ImGui.Button("Close", new Vector2(80, 24)))
@@ -1041,8 +1867,8 @@ public sealed class MainWindow : Window, IDisposable
         if (hadUsableDjBefore)
             return;
 
-        if (this.plugin.Configuration.DjSchedule.Any(Configuration.HasUsableDj))
-            this.plugin.Configuration.AutoCurrentDjShoutEnabled = true;
+        if (this.Configuration.DjSchedule.Any(Configuration.HasUsableDj))
+            this.Configuration.AutoCurrentDjShoutEnabled = true;
     }
 
     private static bool MatchesDjSearch(DjDatabaseEntry entry, string searchText)
@@ -1061,15 +1887,15 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.InputText(label, ref editedValue, maxLength))
         {
             setter(editedValue.Trim());
-            this.plugin.Configuration.Save();
-            this.plugin.RefreshAutoShoutSchedule();
+            this.Configuration.Save();
+            this.RefreshAutoShoutSchedule();
         }
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Use yyyy-MM-dd, for example 2026-05-16.");
     }
 
-    private void TimePickerAndSave(string label, string value, Action<string> setter)
+    private void TimePickerAndSave(string label, string value, Action<string> setter, float width = 110f)
     {
         var displayValue = NormalizeTimeText(value);
         var popupId = $"{label}TimePickerPopup";
@@ -1077,11 +1903,11 @@ public sealed class MainWindow : Window, IDisposable
         if (!string.Equals(displayValue, value ?? string.Empty, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(value))
         {
             setter(displayValue);
-            this.plugin.Configuration.Save();
+            this.Configuration.Save();
         }
 
-        ImGui.SetNextItemWidth(110f);
-        if (ImGui.Button($"{displayValue} ▼##{label}TimePickerButton", new Vector2(110f, 0)))
+        ImGui.SetNextItemWidth(width);
+        if (ImGui.Button($"{displayValue} ▼##{label}TimePickerButton", new Vector2(width, 0)))
             ImGui.OpenPopup(popupId);
 
         if (!ImGui.BeginPopup(popupId))
@@ -1140,8 +1966,8 @@ public sealed class MainWindow : Window, IDisposable
             if (Configuration.TryParseServerTime(typedValue, out var typedTime))
             {
                 setter(FormatTime(typedTime.Hours, typedTime.Minutes));
-                this.plugin.Configuration.Save();
-                this.plugin.RefreshAutoShoutSchedule();
+                this.Configuration.Save();
+                this.RefreshAutoShoutSchedule();
             }
         }
 
@@ -1168,8 +1994,8 @@ public sealed class MainWindow : Window, IDisposable
 
         hour = ((hour % 24) + 24) % 24;
         setter(FormatTime(hour, minute));
-        this.plugin.Configuration.Save();
-        this.plugin.RefreshAutoShoutSchedule();
+        this.Configuration.Save();
+        this.RefreshAutoShoutSchedule();
     }
 
     private static TimeSpan ParseOrDefaultTime(string value)
@@ -1196,14 +2022,14 @@ public sealed class MainWindow : Window, IDisposable
         return $"{hour:00}:{minute:00}";
     }
 
-    private void InputAndSave(string label, string value, Action<string> setter, int maxLength)
+    private void InputAndSave(string label, string value, Action<string> setter, int maxLength, float width = -1f)
     {
         var editedValue = value ?? string.Empty;
-        ImGui.SetNextItemWidth(-1);
+        ImGui.SetNextItemWidth(width);
         if (ImGui.InputText(label, ref editedValue, maxLength))
         {
             setter(editedValue);
-            this.plugin.Configuration.Save();
+            this.Configuration.Save();
         }
     }
 
@@ -1214,7 +2040,7 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.InputText(label, ref editedValue, maxLength))
         {
             setter(editedValue);
-            this.plugin.Configuration.Save();
+            this.Configuration.Save();
         }
     }
 
