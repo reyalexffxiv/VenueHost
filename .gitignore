@@ -19,3 +19,6 @@ Thumbs.db
 
 # Local packaging/check folders
 zipcheck/
+
+# Downloaded Dalamud runtime zip
+latest.zip
