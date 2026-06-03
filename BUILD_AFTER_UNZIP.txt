@@ -1,0 +1,17 @@
+VenueHost 0.2.0.1 source update
+
+This zip contains source changes only. I could not compile Dalamud/.NET 10 inside the ChatGPT sandbox, so rebuild locally from PowerShell:
+
+cd G:\AmberDev\VenueHostRepo
+dotnet restore .\VenueHost.sln
+dotnet build .\VenueHost.sln -c Release
+powershell -ExecutionPolicy Bypass -File .\scripts\Build-DalamudPackage.ps1
+
+Then verify:
+Remove-Item -Recurse -Force .\zipcheck -ErrorAction SilentlyContinue
+Expand-Archive .\dist\VenueHost-latest.zip .\zipcheck -Force
+Get-Content .\zipcheck\VenueHost.json
+[System.Reflection.AssemblyName]::GetAssemblyName((Resolve-Path ".\zipcheck\VenueHost.dll")).Version
+
+Expected version: 0.2.0.1
+Expected DalamudApiLevel: 15

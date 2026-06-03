@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 17;
+    public const int CurrentConfigVersion = 18;
 
     public const string DefaultCurrentDjMacro =
         "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -137,6 +137,9 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public bool ContrastModeEnabled { get; set; }
 
+    /// <summary>Shows a copy helper in Settings when native chat sending fails.</summary>
+    public bool ShowChatSenderFallbackHelper { get; set; } = true;
+
     [NonSerialized]
     private IDalamudPluginInterface? pluginInterface;
 
@@ -202,6 +205,7 @@ public sealed class Configuration : IPluginConfiguration
         // Version 14 adds Contrast Mode. Existing users keep the default off state.
         // Version 15 adds per-role Staff Schedule auto shout settings.
         // Version 16 adds stagger/queue spacing between automatic role shouts.
+        // Version 18 adds a native chat sender status/test/fallback helper.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.

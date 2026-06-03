@@ -43,6 +43,9 @@ public sealed class ConfigWindow : Window, IDisposable
 
     /// <summary>Automatic staff role shout scheduler and status provider.</summary>
     private StaffAutoShoutService StaffAutoShout => this.Services.Get<StaffAutoShoutService>();
+
+    /// <summary>Native chat command queue/sender status provider.</summary>
+    private GameChatService Chat => this.Services.Get<GameChatService>();
     private bool showVariables;
     private string newStaffRoleName = string.Empty;
     private string renameStaffRoleName = string.Empty;
@@ -186,6 +189,35 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted("Chat Sending");
         ImGui.TextWrapped("Venue Host sends queued native chat commands. Each macro line should usually be a complete FFXIV command like /y, /sh, /s, /em, or /tell.");
         ImGui.TextWrapped("Use the compact wait controls for normal timing. Manual <wait.N> lines are still supported as one-off overrides.");
+
+        var showFallbackHelper = config.ShowChatSenderFallbackHelper;
+        if (ImGui.Checkbox("Show failed-command copy helper", ref showFallbackHelper))
+        {
+            config.ShowChatSenderFallbackHelper = showFallbackHelper;
+            config.Save();
+        }
+
+        if (ImGui.Button("Test chat sender", new Vector2(150, 24)))
+            this.Chat.QueueSenderTestCommand();
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Queues a harmless /e echo command. Use this after FFXIV or Dalamud patches.");
+
+        ImGui.SameLine();
+        ImGui.TextDisabled($"Pending: {this.Chat.PendingCommandCount}");
+        ImGui.TextWrapped($"Status: {this.Chat.LastStatus}");
+
+        if (config.ShowChatSenderFallbackHelper && this.Chat.HasFailedCommand && !string.IsNullOrWhiteSpace(this.Chat.LastFailedCommand))
+        {
+            ImGui.TextWrapped("Automatic chat sending failed. You can copy the failed command and paste it manually into chat.");
+
+            if (ImGui.Button("Copy failed command", new Vector2(170, 24)))
+                ImGui.SetClipboardText(this.Chat.LastFailedCommand);
+
+            ImGui.SameLine();
+            if (ImGui.Button("Clear failed command", new Vector2(170, 24)))
+                this.Chat.ClearFailedCommand();
+        }
 
         ImGui.Spacing();
         ImGui.Separator();

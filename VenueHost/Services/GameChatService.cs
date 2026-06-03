@@ -41,6 +41,14 @@ public sealed class GameChatService
 
     public bool HasPendingCommands => this.pendingCommands.Count > 0;
 
+    /// <summary>Last command that failed to execute, if any. Useful for manual copy/paste fallback.</summary>
+    public string? LastFailedCommand { get; private set; }
+
+    /// <summary>Time of the last native chat sender failure.</summary>
+    public DateTime? LastFailureAt { get; private set; }
+
+    public bool HasFailedCommand => !string.IsNullOrWhiteSpace(this.LastFailedCommand);
+
     /// <summary>
     /// Queues a /s message.
     /// </summary>
@@ -172,6 +180,24 @@ public sealed class GameChatService
     }
 
     /// <summary>
+    /// Queues a harmless local echo command so users can test the native sender after patches.
+    /// </summary>
+    public void QueueSenderTestCommand()
+    {
+        this.QueueCommand($"/e Venue Host chat sender test {DateTime.Now:HH:mm:ss}");
+    }
+
+    /// <summary>Clears the stored failed command after the user has copied or acknowledged it.</summary>
+    public void ClearFailedCommand()
+    {
+        this.LastFailedCommand = null;
+        this.LastFailureAt = null;
+
+        if (this.LastStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase))
+            this.LastStatus = "Failure cleared. Native chat sender ready.";
+    }
+
+    /// <summary>
     /// Queues any native chat command and waits after it before the next queued command.
     /// </summary>
     public void QueueCommandWithDelay(string command, TimeSpan delayAfterCommand)
@@ -249,12 +275,19 @@ public sealed class GameChatService
 
         if (sent)
         {
+            this.LastFailedCommand = null;
+            this.LastFailureAt = null;
             this.LastStatus = $"Sent command: {queuedCommand.Command}";
             this.nextCommandAllowedAt = DateTime.Now.Add(queuedCommand.DelayAfterCommand);
         }
         else
         {
-            this.LastStatus = $"Failed to send command: {queuedCommand.Command}";
+            var detail = this.LastStatus;
+            this.LastFailedCommand = queuedCommand.Command;
+            this.LastFailureAt = DateTime.Now;
+            this.LastStatus = string.IsNullOrWhiteSpace(detail)
+                ? $"Failed to send command: {queuedCommand.Command}"
+                : $"Failed to send command: {queuedCommand.Command} ({detail})";
             this.nextCommandAllowedAt = DateTime.Now.AddSeconds(1);
         }
     }
