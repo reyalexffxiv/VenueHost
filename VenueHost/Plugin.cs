@@ -54,6 +54,9 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>Service that owns automatic staff role shout timing and staggered queue state.</summary>
     private StaffAutoShoutService StaffAutoShoutService { get; }
 
+    /// <summary>Service that owns manual and automatic event/custom shouts.</summary>
+    private EventShoutService EventShoutService { get; }
+
     public Plugin()
     {
         this.Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
@@ -83,6 +86,9 @@ public sealed class Plugin : IDalamudPlugin
 
         this.StaffAutoShoutService = new StaffAutoShoutService(this.Configuration, this.Services);
         this.Services.Add(this.StaffAutoShoutService);
+
+        this.EventShoutService = new EventShoutService(this.Configuration, this.Services);
+        this.Services.Add(this.EventShoutService);
 
         this.FileDialogService = new FileDialogService(this.Configuration, this.Services);
         this.Services.Add(this.FileDialogService);
@@ -151,6 +157,7 @@ public sealed class Plugin : IDalamudPlugin
         this.GameChatService.FlushOnePendingCommand();
         this.DjAutoShoutService.Update();
         this.StaffAutoShoutService.Update();
+        this.EventShoutService.Update();
     }
 
     private void OnCommand(string command, string args)

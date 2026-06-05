@@ -20,6 +20,8 @@ public sealed class MainWindow : Window, IDisposable
     private const float MainWindowMinHeight = 900f;
     private const float EventDetailsInputWidth = 180f;
     private const float EventCommandInputWidth = 120f;
+    private const string EventShoutEditorWindowId = "Event Shout Editor###VenueHostEventShoutEditor";
+
 
     private readonly Configuration configuration;
     private readonly IServiceContext services;
@@ -41,6 +43,9 @@ public sealed class MainWindow : Window, IDisposable
 
     /// <summary>Automatic staff role shout scheduler and status provider.</summary>
     private StaffAutoShoutService StaffAutoShout => this.Services.Get<StaffAutoShoutService>();
+
+    /// <summary>Manual and automatic event/custom shout scheduler.</summary>
+    private EventShoutService EventShouts => this.Services.Get<EventShoutService>();
 
     public MainWindow(Configuration configuration, IServiceContext services)
         : base("Venue Host###VenueHostMain")
@@ -68,6 +73,20 @@ public sealed class MainWindow : Window, IDisposable
     private readonly Dictionary<int, string> djPickerQuickAddNameByOrder = new();
     private readonly Dictionary<int, string> djPickerQuickAddLinkByOrder = new();
     private readonly Dictionary<int, string> staffPickerSearchTextByOrder = new();
+
+    // Draft state for the non-blocking Add/Edit Event Shout editor window.
+    // The editor works on this temporary copy so Cancel can discard changes cleanly.
+    private bool eventShoutEditorOpen;
+    private bool eventShoutEditorIsNew;
+    private int eventShoutEditorOrder;
+    private string eventShoutEditorName = string.Empty;
+    private string eventShoutEditorMacro = string.Empty;
+    private bool eventShoutEditorActive;
+    private bool eventShoutEditorAutoEnabled;
+    private int eventShoutEditorIntervalMinutes = 15;
+    private string eventShoutEditorStartTime = "18:00";
+    private string eventShoutEditorEndTime = "23:00";
+    private float eventShoutEditorDelaySeconds = 2f;
 
     public void Dispose()
     {
@@ -98,6 +117,7 @@ public sealed class MainWindow : Window, IDisposable
     {
         this.DjAutoShout.Refresh();
         this.StaffAutoShout.Refresh();
+        this.EventShouts.Refresh();
     }
 
     public override void Draw()
@@ -121,8 +141,15 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.EndTabItem();
         }
 
+        if (ImGui.BeginTabItem("Event Shouts"))
+        {
+            this.DrawEventShoutsTab();
+            ImGui.EndTabItem();
+        }
+
         ImGui.EndTabBar();
 
+        this.DrawEventShoutEditorWindow(this.Configuration);
         this.DrawMascotCorner();
     }
 
@@ -200,6 +227,384 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Spacing();
 
         this.DrawStaffScheduleStatusPanel(config);
+    }
+
+    private void DrawEventShoutsTab()
+    {
+        var config = this.Configuration;
+        config.EnsureEventShoutDefaults();
+
+        this.DrawEventShoutWindow(config);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.TextUnformatted("Event / custom shouts");
+        ImGui.TextDisabled("Create reusable venue-wide macros. Auto timers run only inside the event shout window.");
+        ImGui.Spacing();
+
+        this.DrawEventShoutsTable(config);
+
+        ImGui.Spacing();
+        this.DrawEventShoutButtons(config);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        this.DrawEventShoutStatusPanel(config);
+    }
+
+    private void DrawEventShoutWindow(Configuration config)
+    {
+        config.EnsureEventShoutWindowDefaults();
+        var startX = ImGui.GetCursorPosX();
+        var endX = startX + 260f;
+
+        ImGui.TextUnformatted("Event shout window");
+        ImGui.Separator();
+        ImGui.TextDisabled("Shout Start");
+        ImGui.SameLine(endX);
+        ImGui.TextDisabled("Shout End");
+
+        this.DateInputAndSave("##EventShoutStartDate", config.EventShoutStartDate, v => config.EventShoutStartDate = v, 11);
+        ImGui.SameLine();
+        this.TimePickerAndSave("EventShoutStart", config.EventShoutStartTime, value => config.EventShoutStartTime = value);
+
+        ImGui.SameLine(endX);
+        this.DateInputAndSave("##EventShoutEndDate", config.EventShoutEndDate, v => config.EventShoutEndDate = v, 11);
+        ImGui.SameLine();
+        this.TimePickerAndSave("EventShoutEnd", config.EventShoutEndTime, value => config.EventShoutEndTime = value);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Use Event Window", new Vector2(135f, 24f), ButtonTone.Neutral) && config.TryGetEventWindow(out _, out _))
+        {
+            config.EventShoutStartDate = config.EventStartDate;
+            config.EventShoutStartTime = config.EventStartTime;
+            config.EventShoutEndDate = config.EventEndDate;
+            config.EventShoutEndTime = config.EventEndTime;
+            config.Save();
+            this.EventShouts.Refresh();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy the DJ/Event schedule window into the event shout window.");
+
+        ImGui.TextDisabled("Dates/times are ST / UTC. Automatic custom shouts only run inside this window.");
+    }
+
+    private void DrawEventShoutsTable(Configuration config)
+    {
+        if (config.EventShouts.Count == 0)
+        {
+            ImGui.TextDisabled("No custom shouts yet. Use Add Shout to create one.");
+            return;
+        }
+
+        const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("VenueHostEventShoutsV12", 7, flags, new Vector2(632f, 0)))
+            return;
+
+        ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 34f);
+        ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 224f);
+        ImGui.TableSetupColumn("Auto", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 52f);
+        ImGui.TableSetupColumn("Interval", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 72f);
+        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 66f);
+        ImGui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 66f);
+        ImGui.TableSetupColumn("Active", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 78f);
+        DrawCenteredTableHeaders(string.Empty, "Name", "Auto", "Interval", "Start", "End", "Active");
+
+        foreach (var entry in config.EventShouts.OrderBy(entry => entry.Order))
+        {
+            ImGui.TableNextRow();
+            ImGui.TableSetColumnIndex(0);
+            CenterNextItem(18f);
+            var selected = config.SelectedEventShoutOrder == entry.Order;
+            if (ImGui.RadioButton($"##SelectEventShout{entry.Order}", selected))
+            {
+                config.SelectedEventShoutOrder = entry.Order;
+                config.Save();
+            }
+
+            ImGui.TableSetColumnIndex(1);
+            ImGui.TextUnformatted(string.IsNullOrWhiteSpace(entry.Name) ? "New Shout" : entry.Name);
+
+            ImGui.TableSetColumnIndex(2);
+            CenterNextItem(22f);
+            var autoEnabled = entry.AutoEnabled;
+            if (ImGui.Checkbox($"##EventShoutAuto{entry.Order}", ref autoEnabled))
+            {
+                entry.AutoEnabled = autoEnabled;
+                config.Save();
+                this.EventShouts.Refresh();
+            }
+
+            ImGui.TableSetColumnIndex(3);
+            DrawCenteredText($"{Math.Clamp(entry.IntervalMinutes, 1, 240)} min");
+
+            ImGui.TableSetColumnIndex(4);
+            DrawCenteredText(NormalizeTimeText(entry.StartTime));
+
+            ImGui.TableSetColumnIndex(5);
+            DrawCenteredText(NormalizeTimeText(entry.EndTime));
+
+            ImGui.TableSetColumnIndex(6);
+            CenterNextItem(22f);
+            var active = entry.Active;
+            if (ImGui.Checkbox($"##EventShoutActive{entry.Order}", ref active))
+            {
+                entry.Active = active;
+                config.Save();
+                this.EventShouts.Refresh();
+            }
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawEventShoutButtons(Configuration config)
+    {
+        if (this.ColoredButton("Add Shout", new Vector2(95, 28), ButtonTone.Positive))
+            this.OpenAddEventShoutEditor(config);
+
+        var selected = config.GetSelectedEventShout();
+        var hasSelected = selected is not null;
+        if (!hasSelected)
+            ImGui.BeginDisabled();
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Edit Shout", new Vector2(92, 28), ButtonTone.Primary) && selected is not null)
+            this.OpenEditEventShoutEditor(selected);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Remove", new Vector2(80, 28), ButtonTone.Danger) && selected is not null)
+        {
+            config.EventShouts.Remove(selected);
+            config.NormalizeEventShoutOrders();
+            config.SelectedEventShoutOrder = config.EventShouts.FirstOrDefault()?.Order ?? 0;
+            config.Save();
+            this.EventShouts.Refresh();
+        }
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Move Up", new Vector2(82, 28), ButtonTone.Neutral))
+            this.MoveSelectedEventShout(config, -1);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Move Down", new Vector2(96, 28), ButtonTone.Neutral))
+            this.MoveSelectedEventShout(config, 1);
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Shout Now", new Vector2(96, 28), ButtonTone.Primary))
+            this.EventShouts.SendSelectedEventShout();
+
+        if (!hasSelected)
+            ImGui.EndDisabled();
+    }
+
+    private void OpenAddEventShoutEditor(Configuration config)
+    {
+        this.eventShoutEditorIsNew = true;
+        this.eventShoutEditorOrder = 0;
+        this.eventShoutEditorName = $"Custom Shout {config.EventShouts.Count + 1}";
+        this.eventShoutEditorMacro = Configuration.DefaultEventShoutMacro;
+        this.eventShoutEditorActive = true;
+        this.eventShoutEditorAutoEnabled = false;
+        this.eventShoutEditorIntervalMinutes = 15;
+        this.eventShoutEditorStartTime = NormalizeTimeText(config.EventShoutStartTime);
+        this.eventShoutEditorEndTime = NormalizeTimeText(config.EventShoutEndTime);
+        this.eventShoutEditorDelaySeconds = 2f;
+        this.eventShoutEditorOpen = true;
+    }
+
+    private void OpenEditEventShoutEditor(EventShoutEntry entry)
+    {
+        this.eventShoutEditorIsNew = false;
+        this.eventShoutEditorOrder = entry.Order;
+        this.eventShoutEditorName = string.IsNullOrWhiteSpace(entry.Name) ? "New Shout" : entry.Name;
+        this.eventShoutEditorMacro = entry.Macro ?? string.Empty;
+        this.eventShoutEditorActive = entry.Active;
+        this.eventShoutEditorAutoEnabled = entry.AutoEnabled;
+        this.eventShoutEditorIntervalMinutes = Math.Clamp(entry.IntervalMinutes, 1, 240);
+        this.eventShoutEditorStartTime = NormalizeTimeText(entry.StartTime);
+        this.eventShoutEditorEndTime = NormalizeTimeText(entry.EndTime);
+        this.eventShoutEditorDelaySeconds = Math.Clamp(entry.DelaySeconds, 0f, 10f);
+        this.eventShoutEditorOpen = true;
+    }
+
+    private void DrawEventShoutEditorWindow(Configuration config)
+    {
+        if (!this.eventShoutEditorOpen)
+            return;
+
+        // Use a regular floating window instead of a modal popup so venue
+        // operators can still interact with the main controls while editing.
+        ImGui.SetNextWindowSize(new Vector2(820f, 590f), ImGuiCond.Appearing);
+        if (!ImGui.Begin(EventShoutEditorWindowId, ref this.eventShoutEditorOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings))
+        {
+            ImGui.End();
+            return;
+        }
+
+        ImGui.TextUnformatted(this.eventShoutEditorIsNew ? "Add Event Shout" : "Edit Event Shout");
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.SetNextItemWidth(300f);
+        ImGui.InputText("Name##EventShoutEditorName", ref this.eventShoutEditorName, 80);
+
+        ImGui.SameLine();
+        ImGui.Checkbox("Active##EventShoutEditorActive", ref this.eventShoutEditorActive);
+
+        ImGui.SameLine();
+        ImGui.Checkbox("Auto timer##EventShoutEditorAuto", ref this.eventShoutEditorAutoEnabled);
+
+        if (DrawIntStepper("Interval##EventShoutEditorInterval", ref this.eventShoutEditorIntervalMinutes, 1, 240, 1, "min"))
+            this.eventShoutEditorIntervalMinutes = Math.Clamp(this.eventShoutEditorIntervalMinutes, 1, 240);
+
+        ImGui.TextUnformatted("Shout row window");
+        ImGui.TextDisabled("This row only auto-shouts during this time, inside the global Event Shout window.");
+        this.TimePickerAndSave("EventShoutEditorStart", this.eventShoutEditorStartTime, value => this.eventShoutEditorStartTime = value, width: 88f);
+        ImGui.SameLine();
+        ImGui.TextUnformatted("Start");
+        ImGui.SameLine(210f);
+        this.TimePickerAndSave("EventShoutEditorEnd", this.eventShoutEditorEndTime, value => this.eventShoutEditorEndTime = value, width: 88f);
+        ImGui.SameLine();
+        ImGui.TextUnformatted("End");
+
+        if (DrawFloatStepper("Wait between lines##EventShoutEditorWait", ref this.eventShoutEditorDelaySeconds, 0f, 10f, 0.5f, "sec"))
+            this.eventShoutEditorDelaySeconds = Math.Clamp(this.eventShoutEditorDelaySeconds, 0f, 10f);
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Macro");
+        ImGui.TextDisabled("Use full chat commands, one per line. Example: /sh Welcome to {VenueName}!");
+        ImGui.SetNextItemWidth(780f);
+        ImGui.InputTextMultiline("##EventShoutEditorMacro", ref this.eventShoutEditorMacro, 2000, new Vector2(780f, 170f));
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Preview");
+        var previewEntry = new EventShoutEntry
+        {
+            Order = this.eventShoutEditorOrder,
+            Name = this.eventShoutEditorName,
+            Macro = this.eventShoutEditorMacro,
+            Active = this.eventShoutEditorActive,
+            AutoEnabled = this.eventShoutEditorAutoEnabled,
+            IntervalMinutes = this.eventShoutEditorIntervalMinutes,
+            StartTime = this.eventShoutEditorStartTime,
+            EndTime = this.eventShoutEditorEndTime,
+            DelaySeconds = this.eventShoutEditorDelaySeconds,
+        };
+        var preview = this.EventShouts.PreviewEventShout(previewEntry);
+        ImGui.SetNextItemWidth(780f);
+        ImGui.InputTextMultiline("##EventShoutEditorPreview", ref preview, 2000, new Vector2(780f, 110f), ImGuiInputTextFlags.ReadOnly);
+
+        ImGui.Spacing();
+        var canSave = !string.IsNullOrWhiteSpace(this.eventShoutEditorName) && !string.IsNullOrWhiteSpace(this.eventShoutEditorMacro);
+        if (!canSave)
+            ImGui.BeginDisabled();
+
+        if (this.ColoredButton("Save", new Vector2(110f, 28f), ButtonTone.Positive))
+        {
+            this.SaveEventShoutEditor(config);
+            this.eventShoutEditorOpen = false;
+        }
+
+        if (!canSave)
+            ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        if (this.ColoredButton("Cancel", new Vector2(110f, 28f), ButtonTone.Neutral))
+            this.eventShoutEditorOpen = false;
+
+        ImGui.End();
+    }
+
+    private void SaveEventShoutEditor(Configuration config)
+    {
+        EventShoutEntry entry;
+        if (this.eventShoutEditorIsNew)
+        {
+            entry = new EventShoutEntry();
+            config.EventShouts.Add(entry);
+        }
+        else
+        {
+            entry = config.EventShouts.FirstOrDefault(item => item.Order == this.eventShoutEditorOrder) ?? new EventShoutEntry();
+            if (!config.EventShouts.Contains(entry))
+                config.EventShouts.Add(entry);
+        }
+
+        entry.Name = string.IsNullOrWhiteSpace(this.eventShoutEditorName) ? "New Shout" : this.eventShoutEditorName.Trim();
+        entry.Macro = string.IsNullOrWhiteSpace(this.eventShoutEditorMacro) ? Configuration.DefaultEventShoutMacro : this.eventShoutEditorMacro;
+        entry.Active = this.eventShoutEditorActive;
+        entry.AutoEnabled = this.eventShoutEditorAutoEnabled;
+        entry.IntervalMinutes = Math.Clamp(this.eventShoutEditorIntervalMinutes, 1, 240);
+        entry.StartTime = NormalizeTimeText(this.eventShoutEditorStartTime);
+        entry.EndTime = NormalizeTimeText(this.eventShoutEditorEndTime);
+        entry.DelaySeconds = Math.Clamp(this.eventShoutEditorDelaySeconds, 0f, 10f);
+
+        config.NormalizeEventShoutOrders();
+        config.SelectedEventShoutOrder = entry.Order;
+        config.Save();
+        this.EventShouts.Refresh();
+    }
+
+    private void DrawEventShoutStatusPanel(Configuration config)
+    {
+        ImGui.TextUnformatted("Auto event shouts");
+        ImGui.TextDisabled($"Server Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} ST / UTC");
+        ImGui.TextDisabled(this.EventShouts.Status);
+
+        var selected = config.GetSelectedEventShout();
+        var nextSelected = this.EventShouts.GetNextShoutAtUtc(selected);
+        ImGui.TextDisabled($"Selected next: {(nextSelected.HasValue ? nextSelected.Value.ToString("yyyy-MM-dd HH:mm:ss") + " ST" : "none")}");
+
+        var upcoming = this.EventShouts.GetUpcomingEventShouts(8);
+        if (upcoming.Count == 0)
+            return;
+
+        ImGui.Spacing();
+        if (!ImGui.BeginTable("VenueHostUpcomingEventShoutsV2", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoSavedSettings, new Vector2(440f, 0)))
+            return;
+
+        ImGui.TableSetupColumn("Time", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 92f);
+        ImGui.TableSetupColumn("Shout", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 230f);
+        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 96f);
+        DrawCenteredTableHeaders("Time", "Shout", "Status");
+
+        for (var i = 0; i < upcoming.Count; i++)
+        {
+            var item = upcoming[i];
+            ImGui.TableNextRow();
+            ImGui.TableSetColumnIndex(0);
+            DrawCenteredText(item.TimeText);
+            ImGui.TableSetColumnIndex(1);
+            ImGui.TextUnformatted(item.Shout.Name);
+            ImGui.TableSetColumnIndex(2);
+            DrawCenteredDisabledText(i == 0 ? "Next" : "Queued");
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void MoveSelectedEventShout(Configuration config, int direction)
+    {
+        var selected = config.GetSelectedEventShout();
+        if (selected is null)
+            return;
+
+        config.NormalizeEventShoutOrders();
+        var index = config.EventShouts.FindIndex(entry => entry.Order == selected.Order);
+        var newIndex = index + direction;
+        if (index < 0 || newIndex < 0 || newIndex >= config.EventShouts.Count)
+            return;
+
+        (config.EventShouts[index], config.EventShouts[newIndex]) = (config.EventShouts[newIndex], config.EventShouts[index]);
+        config.NormalizeEventShoutOrders();
+        config.SelectedEventShoutOrder = config.EventShouts[newIndex].Order;
+        config.Save();
+        this.EventShouts.Refresh();
     }
 
 
@@ -649,6 +1054,42 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.PushID(label);
         ImGui.SetNextItemWidth(70);
         if (ImGui.InputInt("##value", ref inputValue, 0, 0))
+        {
+            value = Math.Clamp(inputValue, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("-", new Vector2(28, 0)))
+        {
+            value = Math.Clamp(value - step, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("+", new Vector2(28, 0)))
+        {
+            value = Math.Clamp(value + step, min, max);
+            changed = true;
+        }
+
+        ImGui.SameLine();
+        ImGui.TextUnformatted($"{displayLabel} ({suffix})");
+        ImGui.PopID();
+
+        return changed;
+    }
+
+
+    private static bool DrawFloatStepper(string label, ref float value, float min, float max, float step, string suffix)
+    {
+        var changed = false;
+        var inputValue = value;
+        var displayLabel = StripImGuiId(label);
+
+        ImGui.PushID(label);
+        ImGui.SetNextItemWidth(70);
+        if (ImGui.InputFloat("##value", ref inputValue, 0f, 0f, "%.1f"))
         {
             value = Math.Clamp(inputValue, min, max);
             changed = true;
@@ -1612,6 +2053,20 @@ public sealed class MainWindow : Window, IDisposable
             CenterNextItem(textWidth);
             ImGui.TableHeader(label);
         }
+    }
+
+    private static void DrawCenteredText(string text)
+    {
+        var textWidth = ImGui.CalcTextSize(text).X;
+        CenterNextItem(textWidth);
+        ImGui.TextUnformatted(text);
+    }
+
+    private static void DrawCenteredDisabledText(string text)
+    {
+        var textWidth = ImGui.CalcTextSize(text).X;
+        CenterNextItem(textWidth);
+        ImGui.TextDisabled(text);
     }
 
     private static void CenterNextItem(float itemWidth)

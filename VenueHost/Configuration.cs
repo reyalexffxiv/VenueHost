@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 18;
+    public const int CurrentConfigVersion = 21;
 
     public const string DefaultCurrentDjMacro =
         "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -51,6 +51,9 @@ public sealed class Configuration : IPluginConfiguration
         "/sh Don't be shy, step inside and allow them to serve you! <3\n" +
         "/sh Let them brighten your day <3";
 
+    public const string DefaultEventShoutMacro =
+        "/sh Welcome to {VenueName}!";
+
     public int Version { get; set; } = CurrentConfigVersion;
 
     public List<DjScheduleEntry> DjSchedule { get; set; } = [];
@@ -64,6 +67,10 @@ public sealed class Configuration : IPluginConfiguration
         new DjDatabaseEntry { Name = "Raindrop Kitty", Link = "https://www.twitch.tv/raindropkitty" },
         new DjDatabaseEntry { Name = "Rey Alex", Link = "https://www.twitch.tv/reyalexxx" },
     ];
+
+    public List<EventShoutEntry> EventShouts { get; set; } = [];
+
+    public int SelectedEventShoutOrder { get; set; } = 0;
 
     // Preserve the existing JSON field name so current users keep their saved staff schedule
     // rows while the C# model moves away from the old photographer-only naming.
@@ -98,6 +105,11 @@ public sealed class Configuration : IPluginConfiguration
     public string StaffStartTime { get; set; } = "18:00";
     public string StaffEndDate { get; set; } = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public string StaffEndTime { get; set; } = "02:00";
+
+    public string EventShoutStartDate { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public string EventShoutStartTime { get; set; } = "18:00";
+    public string EventShoutEndDate { get; set; } = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public string EventShoutEndTime { get; set; } = "02:00";
 
     public string GiveawayText { get; set; } = "2M Gil Giveaway";
     public string GiveawayCommand { get; set; } = "!urban";
@@ -158,6 +170,7 @@ public sealed class Configuration : IPluginConfiguration
         this.EnsureScheduleDefaults();
         this.EnsureStaffRoles();
         this.EnsureStaffScheduleDefaults();
+        this.EnsureEventShoutDefaults();
         this.EnsureEventWindowDefaults();
         this.EnsureStaffWindowDefaults();
         this.NormalizeDjDatabase(saveToStore: false);
@@ -173,6 +186,7 @@ public sealed class Configuration : IPluginConfiguration
         this.StaffDatabase ??= [];
         this.StaffRoles ??= ["Photographer", "Bar", "Courtesan", "Maid"];
         this.StaffRoleShoutSettings ??= [];
+        this.EventShouts ??= [];
 
         // Version 6 added the reusable DJ database and target tell macro.
         if (this.Version < 6 && this.DjDatabase.Count == 0)
@@ -206,6 +220,7 @@ public sealed class Configuration : IPluginConfiguration
         // Version 15 adds per-role Staff Schedule auto shout settings.
         // Version 16 adds stagger/queue spacing between automatic role shouts.
         // Version 18 adds a native chat sender status/test/fallback helper.
+        // Version 19 adds Event Shouts as configurable venue-wide timed macros.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.
@@ -490,6 +505,30 @@ public sealed class Configuration : IPluginConfiguration
         return endUtc > startUtc;
     }
 
+
+    public void EnsureEventShoutWindowDefaults()
+    {
+        this.EventShoutStartDate = NormalizeDateText(this.EventShoutStartDate, DateTime.UtcNow);
+        this.EventShoutEndDate = NormalizeDateText(this.EventShoutEndDate, DateTime.UtcNow.AddDays(1));
+        this.EventShoutStartTime = NormalizeTimeText(this.EventShoutStartTime, string.IsNullOrWhiteSpace(this.EventStartTime) ? "18:00" : this.EventStartTime);
+        this.EventShoutEndTime = NormalizeTimeText(this.EventShoutEndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "02:00" : this.EventEndTime);
+    }
+
+    public bool TryGetEventShoutWindow(out DateTime startUtc, out DateTime endUtc)
+    {
+        this.EnsureEventShoutWindowDefaults();
+        startUtc = default;
+        endUtc = default;
+
+        if (!DateTime.TryParseExact($"{this.EventShoutStartDate} {this.EventShoutStartTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out startUtc))
+            return false;
+
+        if (!DateTime.TryParseExact($"{this.EventShoutEndDate} {this.EventShoutEndTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out endUtc))
+            return false;
+
+        return endUtc > startUtc;
+    }
+
     public static bool TryParseServerDate(string? value, out DateTime date)
     {
         value = (value ?? string.Empty).Trim();
@@ -724,6 +763,81 @@ public sealed class Configuration : IPluginConfiguration
             : now >= start || now < end;
     }
 
+
+
+    public void EnsureEventShoutDefaults()
+    {
+        this.EventShouts ??= [];
+
+        foreach (var entry in this.EventShouts)
+        {
+            entry.Name = string.IsNullOrWhiteSpace(entry.Name) ? "New Shout" : entry.Name.Trim();
+            entry.Macro = string.IsNullOrWhiteSpace(entry.Macro) ? DefaultEventShoutMacro : entry.Macro;
+            entry.StartTime = NormalizeTimeText(entry.StartTime, string.IsNullOrWhiteSpace(this.EventShoutStartTime) ? "18:00" : this.EventShoutStartTime);
+            entry.EndTime = NormalizeTimeText(entry.EndTime, string.IsNullOrWhiteSpace(this.EventShoutEndTime) ? "23:00" : this.EventShoutEndTime);
+            entry.DelaySeconds = Math.Clamp(entry.DelaySeconds, 0f, 10f);
+            entry.IntervalMinutes = Math.Clamp(entry.IntervalMinutes, 1, 240);
+        }
+
+        this.NormalizeEventShoutOrders();
+
+        if (this.EventShouts.Count == 0)
+        {
+            this.SelectedEventShoutOrder = 0;
+            return;
+        }
+
+        if (this.SelectedEventShoutOrder <= 0 || this.EventShouts.All(entry => entry.Order != this.SelectedEventShoutOrder))
+            this.SelectedEventShoutOrder = this.EventShouts[0].Order;
+    }
+
+    public void NormalizeEventShoutOrders()
+    {
+        this.EventShouts ??= [];
+        for (var i = 0; i < this.EventShouts.Count; i++)
+            this.EventShouts[i].Order = i + 1;
+    }
+
+    public EventShoutEntry? GetSelectedEventShout()
+    {
+        this.EnsureEventShoutDefaults();
+        return this.EventShouts.FirstOrDefault(entry => entry.Order == this.SelectedEventShoutOrder) ?? this.EventShouts.FirstOrDefault();
+    }
+
+    public IEnumerable<EventShoutEntry> GetAutoEnabledEventShouts()
+    {
+        this.EnsureEventShoutDefaults();
+        return this.EventShouts
+            .Where(entry => HasUsableEventShout(entry) && entry.Active && entry.AutoEnabled)
+            .OrderBy(entry => entry.Order)
+            .ToList();
+    }
+
+    public static bool HasUsableEventShout(EventShoutEntry? entry)
+    {
+        return entry is not null &&
+               !string.IsNullOrWhiteSpace(entry.Name) &&
+               !string.IsNullOrWhiteSpace(entry.Macro);
+    }
+
+    public Dictionary<string, string> BuildEventShoutVariables(EventShoutEntry? entry, DateTime? utcNow = null)
+    {
+        var variables = this.BuildVariables();
+        var now = utcNow ?? DateTime.UtcNow;
+        variables["ShoutName"] = entry?.Name ?? string.Empty;
+        variables["EventShoutName"] = entry?.Name ?? string.Empty;
+        variables["CurrentTime"] = now.ToString("HH:mm", CultureInfo.InvariantCulture);
+        variables["ServerTime"] = now.ToString("HH:mm", CultureInfo.InvariantCulture);
+        variables["EventShoutStartDate"] = this.EventShoutStartDate;
+        variables["EventShoutStartTime"] = this.EventShoutStartTime;
+        variables["EventShoutEndDate"] = this.EventShoutEndDate;
+        variables["EventShoutEndTime"] = this.EventShoutEndTime;
+        variables["ShoutStartTime"] = entry?.StartTime ?? string.Empty;
+        variables["ShoutEndTime"] = entry?.EndTime ?? string.Empty;
+        variables["EventShoutRowStartTime"] = entry?.StartTime ?? string.Empty;
+        variables["EventShoutRowEndTime"] = entry?.EndTime ?? string.Empty;
+        return variables;
+    }
 
     public void EnsureStaffScheduleDefaults()
     {
@@ -1065,6 +1179,16 @@ public sealed class Configuration : IPluginConfiguration
             changed = true;
         }
 
+        foreach (var eventShout in this.EventShouts ?? [])
+        {
+            var macro = eventShout.Macro;
+            if (RemoveManualWaitLines(ref macro))
+            {
+                eventShout.Macro = macro;
+                changed = true;
+            }
+        }
+
         return changed;
     }
 
@@ -1296,6 +1420,12 @@ public sealed class Configuration : IPluginConfiguration
 
         if (this.AutoStaffRoleShoutStaggerMinutes > 30)
             this.AutoStaffRoleShoutStaggerMinutes = 30;
+
+        foreach (var eventShout in this.EventShouts ?? [])
+        {
+            eventShout.IntervalMinutes = Math.Clamp(eventShout.IntervalMinutes, 1, 240);
+            eventShout.DelaySeconds = Math.Clamp(eventShout.DelaySeconds, 0f, 10f);
+        }
     }
 
     public void Save()

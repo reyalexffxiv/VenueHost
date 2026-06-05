@@ -1,12 +1,12 @@
-Venue Host 0.2.0.0
+Venue Host 0.3.0.0
 
-- Refactored Venue Host toward a cleaner service-based architecture.
-- Added shared ServiceContext/BaseService pattern for current and future modules.
-- Moved DJ auto-shout, staff auto-shout, shout sending, UI toggles, and file dialogs into services.
-- Removed direct Plugin window dependencies; windows now use Configuration and IServiceContext.
-- Renamed legacy PhotographerEntry internals to StaffScheduleEntry while preserving saved config compatibility.
-- Added Staff Schedule and Staff Database support for reusable staff names, roles, and role auto-shouts.
-- Fixed staff auto-shout queue fairness so due roles are processed in order under DJ chat queue pressure.
-- Aligned Upcoming role shouts preview with the real scheduler queue.
-- Fixed CSV import/export file dialogs so they no longer block Dalamud UI drawing.
-- Polished main/settings window sizing, table headers, time columns, event details, and mascot placement.
+- Added Event Shouts tab for reusable venue-wide custom shout macros.
+- Added Event Shout window as the global automatic shout enclosure.
+- Added per-shout Start/End windows so each custom shout can run on its own schedule.
+- Added manual Shout Now action for selected custom shouts.
+- Added non-blocking Add/Edit Event Shout editor window with macro preview.
+- Added FIFO queue spacing for simultaneous Event Shouts so due announcements stagger cleanly.
+- Projected Event Shout queue preview now shows expected staggered send times.
+- Added Event Shout macro variables for shout names and shout window times.
+- Kept the service-based architecture: EventShoutService owns timing, queue state, preview, and send behavior.
+- Polished Event Shouts tables and controls to match the existing DJ Lineup and Staff Schedule UI.

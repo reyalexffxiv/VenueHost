@@ -74,6 +74,10 @@ public sealed class ConfigWindow : Window, IDisposable
         "{StaffNames}",
         "{StaffCount}",
         "{IsAre}",
+        "{ShoutName}",
+        "{EventShoutName}",
+        "{CurrentTime}",
+        "{ServerTime}",
     ];
 
     public ConfigWindow(Configuration configuration, IServiceContext services)

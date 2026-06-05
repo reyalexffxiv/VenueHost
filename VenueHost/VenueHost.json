@@ -2,7 +2,7 @@
   "Author": "ReyAlex",
   "Name": "Venue Host",
   "InternalName": "VenueHost",
-  "AssemblyVersion": "0.2.0.1",
+  "AssemblyVersion": "0.3.0.0",
   "Punchline": "DJ shout and macro assistant for FFXIV venues.",
   "Description": "Lightweight plugin to help with Venue Hosting.",
   "ApplicableVersion": "any",
