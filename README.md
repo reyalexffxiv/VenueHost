@@ -31,4 +31,4 @@ ReyAlex
 
 ## Version
 
-0.3.0.0 is the current beta release of Venue Host.
+0.3.0.1 is the current beta release of Venue Host.

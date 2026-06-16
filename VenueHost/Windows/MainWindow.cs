@@ -767,10 +767,11 @@ public sealed class MainWindow : Window, IDisposable
     {
         if (this.ColoredButton("Add Staff", new Vector2(115, 28), ButtonTone.Positive))
         {
-            var last = config.StaffSchedule.Count > 0 ? config.StaffSchedule[^1] : null;
-            var startTime = NormalizeTimeText(last?.EndTime ?? "18:00");
-            var duration = last is null ? 60 : GetReasonableDurationMinutes(last.StartTime, last.EndTime);
-            var endTime = AddMinutesToServerTime(startTime, duration);
+            // Staff rows are independent and can overlap. New rows should start at
+            // the staff/event window's first hour instead of chaining after the
+            // previous row like a DJ timeline.
+            var startTime = NormalizeTimeText(config.StaffStartTime, NormalizeTimeText(config.EventStartTime, "18:00"));
+            var endTime = AddMinutesToServerTime(startTime, 60);
 
             config.StaffSchedule.Add(new StaffScheduleEntry
             {
@@ -2463,6 +2464,13 @@ public sealed class MainWindow : Window, IDisposable
         return Configuration.TryParseServerTime(value, out var parsed)
             ? FormatTime(parsed.Hours, parsed.Minutes)
             : "00:00";
+    }
+
+    private static string NormalizeTimeText(string? value, string fallback)
+    {
+        return Configuration.TryParseServerTime(value, out var parsed)
+            ? FormatTime(parsed.Hours, parsed.Minutes)
+            : NormalizeTimeText(fallback);
     }
 
     private static int RoundToNearestFive(int minute)

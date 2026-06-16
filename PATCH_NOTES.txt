@@ -1,4 +1,9 @@
-Venue Host 0.3.0.0
+Venue Host 0.3.0.1
+
+- Rebuilt for the current Dalamud API 15 package after the latest FFXIV/Dalamud update.
+- Fixed Staff Schedule timeline logic so staff rows are independent and can overlap.
+- Fixed staff rows with earlier start times after later rows being pushed to the next day/outside the staff window.
+- Changed Add Staff default time to the first hour of the staff/event window instead of chaining after the previous row.
 
 - Added Event Shouts tab for reusable venue-wide custom shout macros.
 - Added Event Shout window as the global automatic shout enclosure.

@@ -568,12 +568,6 @@ public sealed class Configuration : IPluginConfiguration
             while (slotStartUtc < eventStartUtc)
                 slotStartUtc = slotStartUtc.AddDays(1);
 
-            if (previousStartUtc.HasValue)
-            {
-                while (slotStartUtc < previousStartUtc.Value)
-                    slotStartUtc = slotStartUtc.AddDays(1);
-            }
-
             var slotEndUtc = slotStartUtc.Date.Add(endTime);
             if (slotEndUtc <= slotStartUtc)
                 slotEndUtc = slotEndUtc.AddDays(1);
@@ -888,8 +882,6 @@ public sealed class Configuration : IPluginConfiguration
         if (!this.TryGetStaffWindow(out var eventStartUtc, out var eventEndUtc))
             return result;
 
-        DateTime? previousStartUtc = null;
-
         foreach (var entry in this.StaffSchedule.OrderBy(entry => entry.Order))
         {
             if (!HasUsableStaffScheduleEntry(entry) ||
@@ -904,19 +896,12 @@ public sealed class Configuration : IPluginConfiguration
             while (slotStartUtc < eventStartUtc)
                 slotStartUtc = slotStartUtc.AddDays(1);
 
-            if (previousStartUtc.HasValue)
-            {
-                while (slotStartUtc < previousStartUtc.Value)
-                    slotStartUtc = slotStartUtc.AddDays(1);
-            }
-
             var slotEndUtc = slotStartUtc.Date.Add(endTime);
             if (slotEndUtc <= slotStartUtc)
                 slotEndUtc = slotEndUtc.AddDays(1);
 
             var inside = slotStartUtc >= eventStartUtc && slotEndUtc <= eventEndUtc;
             result.Add(new StaffScheduleTimelineSlot(entry, slotStartUtc, slotEndUtc, inside));
-            previousStartUtc = slotStartUtc;
         }
 
         return result;
