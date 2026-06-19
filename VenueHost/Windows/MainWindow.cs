@@ -81,7 +81,6 @@ public sealed class MainWindow : Window, IDisposable
     private int eventShoutEditorOrder;
     private string eventShoutEditorName = string.Empty;
     private string eventShoutEditorMacro = string.Empty;
-    private bool eventShoutEditorActive;
     private bool eventShoutEditorAutoEnabled;
     private int eventShoutEditorIntervalMinutes = 15;
     private string eventShoutEditorStartTime = "18:00";
@@ -302,7 +301,7 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         const ImGuiTableFlags flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("VenueHostEventShoutsV12", 7, flags, new Vector2(632f, 0)))
+        if (!ImGui.BeginTable("VenueHostEventShoutsV13", 6, flags, new Vector2(554f, 0)))
             return;
 
         ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 34f);
@@ -311,8 +310,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TableSetupColumn("Interval", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 72f);
         ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 66f);
         ImGui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 66f);
-        ImGui.TableSetupColumn("Active", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, 78f);
-        DrawCenteredTableHeaders(string.Empty, "Name", "Auto", "Interval", "Start", "End", "Active");
+        DrawCenteredTableHeaders(string.Empty, "Name", "Auto", "Interval", "Start", "End");
 
         foreach (var entry in config.EventShouts.OrderBy(entry => entry.Order))
         {
@@ -347,16 +345,6 @@ public sealed class MainWindow : Window, IDisposable
 
             ImGui.TableSetColumnIndex(5);
             DrawCenteredText(NormalizeTimeText(entry.EndTime));
-
-            ImGui.TableSetColumnIndex(6);
-            CenterNextItem(22f);
-            var active = entry.Active;
-            if (ImGui.Checkbox($"##EventShoutActive{entry.Order}", ref active))
-            {
-                entry.Active = active;
-                config.Save();
-                this.EventShouts.Refresh();
-            }
         }
 
         ImGui.EndTable();
@@ -408,7 +396,6 @@ public sealed class MainWindow : Window, IDisposable
         this.eventShoutEditorOrder = 0;
         this.eventShoutEditorName = $"Custom Shout {config.EventShouts.Count + 1}";
         this.eventShoutEditorMacro = Configuration.DefaultEventShoutMacro;
-        this.eventShoutEditorActive = true;
         this.eventShoutEditorAutoEnabled = false;
         this.eventShoutEditorIntervalMinutes = 15;
         this.eventShoutEditorStartTime = NormalizeTimeText(config.EventShoutStartTime);
@@ -423,7 +410,6 @@ public sealed class MainWindow : Window, IDisposable
         this.eventShoutEditorOrder = entry.Order;
         this.eventShoutEditorName = string.IsNullOrWhiteSpace(entry.Name) ? "New Shout" : entry.Name;
         this.eventShoutEditorMacro = entry.Macro ?? string.Empty;
-        this.eventShoutEditorActive = entry.Active;
         this.eventShoutEditorAutoEnabled = entry.AutoEnabled;
         this.eventShoutEditorIntervalMinutes = Math.Clamp(entry.IntervalMinutes, 1, 240);
         this.eventShoutEditorStartTime = NormalizeTimeText(entry.StartTime);
@@ -452,9 +438,6 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.SetNextItemWidth(300f);
         ImGui.InputText("Name##EventShoutEditorName", ref this.eventShoutEditorName, 80);
-
-        ImGui.SameLine();
-        ImGui.Checkbox("Active##EventShoutEditorActive", ref this.eventShoutEditorActive);
 
         ImGui.SameLine();
         ImGui.Checkbox("Auto timer##EventShoutEditorAuto", ref this.eventShoutEditorAutoEnabled);
@@ -488,7 +471,7 @@ public sealed class MainWindow : Window, IDisposable
             Order = this.eventShoutEditorOrder,
             Name = this.eventShoutEditorName,
             Macro = this.eventShoutEditorMacro,
-            Active = this.eventShoutEditorActive,
+            Active = true,
             AutoEnabled = this.eventShoutEditorAutoEnabled,
             IntervalMinutes = this.eventShoutEditorIntervalMinutes,
             StartTime = this.eventShoutEditorStartTime,
@@ -537,7 +520,7 @@ public sealed class MainWindow : Window, IDisposable
 
         entry.Name = string.IsNullOrWhiteSpace(this.eventShoutEditorName) ? "New Shout" : this.eventShoutEditorName.Trim();
         entry.Macro = string.IsNullOrWhiteSpace(this.eventShoutEditorMacro) ? Configuration.DefaultEventShoutMacro : this.eventShoutEditorMacro;
-        entry.Active = this.eventShoutEditorActive;
+        entry.Active = true;
         entry.AutoEnabled = this.eventShoutEditorAutoEnabled;
         entry.IntervalMinutes = Math.Clamp(this.eventShoutEditorIntervalMinutes, 1, 240);
         entry.StartTime = NormalizeTimeText(this.eventShoutEditorStartTime);
@@ -556,9 +539,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextDisabled($"Server Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} ST / UTC");
         ImGui.TextDisabled(this.EventShouts.Status);
 
-        var selected = config.GetSelectedEventShout();
-        var nextSelected = this.EventShouts.GetNextShoutAtUtc(selected);
-        ImGui.TextDisabled($"Selected next: {(nextSelected.HasValue ? nextSelected.Value.ToString("yyyy-MM-dd HH:mm:ss") + " ST" : "none")}");
+        ImGui.TextDisabled("The selected row is only used for Edit/Remove/Move/Shout Now. Auto timers run for every row with Auto enabled.");
 
         var upcoming = this.EventShouts.GetUpcomingEventShouts(8);
         if (upcoming.Count == 0)

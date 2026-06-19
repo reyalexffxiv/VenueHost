@@ -32,7 +32,8 @@ public sealed class EventShoutEntry
     public int IntervalMinutes { get; set; } = 15;
 
     /// <summary>
-    /// Keeps a shout saved but temporarily disabled from manual/automatic use.
+    /// Legacy field kept so older saved configurations can still load.
+    /// Event Shouts now use <see cref="AutoEnabled"/> for scheduling and the selected row for manual actions.
     /// </summary>
     public bool Active { get; set; } = true;
 }

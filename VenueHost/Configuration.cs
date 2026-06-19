@@ -798,11 +798,15 @@ public sealed class Configuration : IPluginConfiguration
         return this.EventShouts.FirstOrDefault(entry => entry.Order == this.SelectedEventShoutOrder) ?? this.EventShouts.FirstOrDefault();
     }
 
+    /// <summary>
+    /// Returns every usable event shout that has its automatic timer enabled.
+    /// The selected row is intentionally ignored here; selection is only for manual actions such as Shout Now.
+    /// </summary>
     public IEnumerable<EventShoutEntry> GetAutoEnabledEventShouts()
     {
         this.EnsureEventShoutDefaults();
         return this.EventShouts
-            .Where(entry => HasUsableEventShout(entry) && entry.Active && entry.AutoEnabled)
+            .Where(entry => HasUsableEventShout(entry) && entry.AutoEnabled)
             .OrderBy(entry => entry.Order)
             .ToList();
     }

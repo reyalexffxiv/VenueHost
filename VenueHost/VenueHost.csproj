@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
     <PropertyGroup>
-        <Version>0.3.0.1</Version>
+        <Version>0.3.0.2</Version>
         <AssemblyName>VenueHost</AssemblyName>
         <RootNamespace>VenueHost</RootNamespace>
         <PackageProjectUrl>https://github.com/reyalexffxiv/VenueHost</PackageProjectUrl>
@@ -24,6 +24,6 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
-        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
+        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
     </ItemGroup>
 </Project>
