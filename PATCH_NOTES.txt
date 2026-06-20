@@ -1,3 +1,8 @@
+Venue Host 0.3.0.3
+
+- Fixed Event Shouts auto timers so final boundary shouts, such as the last :45 shout in a row window, are not skipped if the framework tick lands slightly late.
+- Added a small due-time grace window for automatic Event Shouts while still preventing duplicate sends after a shout is queued.
+
 Venue Host 0.3.0.2
 
 - Fixed Event Shouts automatic scheduling so all rows with Auto enabled are considered, regardless of which row is selected.

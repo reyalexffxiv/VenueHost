@@ -22,6 +22,13 @@ public sealed class EventShoutService : BaseService
     private static readonly TimeSpan EventShoutQueueSpacing = TimeSpan.FromMinutes(1);
 
     /// <summary>
+    /// Small tolerance for automatic shout timers. Framework ticks, chat queueing,
+    /// and window transitions can happen a few seconds after the exact HH:mm
+    /// boundary, so due shouts remain valid briefly instead of being skipped.
+    /// </summary>
+    private static readonly TimeSpan DueShoutGrace = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// Next raw timer due time per saved shout row.
     /// </summary>
     private readonly Dictionary<int, DateTime> nextShoutAtUtcByOrder = new();
@@ -79,7 +86,7 @@ public sealed class EventShoutService : BaseService
             return;
         }
 
-        if (nowUtc < eventStartUtc || nowUtc >= eventEndUtc)
+        if (nowUtc < eventStartUtc || nowUtc > eventEndUtc.Add(DueShoutGrace))
         {
             this.ClearSchedulerState();
             this.Status = $"Enabled, waiting for event shout window ({eventStartUtc:yyyy-MM-dd HH:mm} → {eventEndUtc:yyyy-MM-dd HH:mm} ST).";
@@ -99,7 +106,7 @@ public sealed class EventShoutService : BaseService
             if (!this.nextShoutAtUtcByOrder.TryGetValue(shout.Order, out var next) ||
                 next <= DateTime.MinValue ||
                 next < shoutStartUtc ||
-                next >= shoutEndUtc)
+                next > shoutEndUtc)
             {
                 this.nextShoutAtUtcByOrder[shout.Order] = CalculateNextOccurrence(nowUtc, shoutStartUtc, shoutEndUtc, TimeSpan.FromMinutes(shout.IntervalMinutes));
             }
@@ -137,7 +144,8 @@ public sealed class EventShoutService : BaseService
                 nowUtc.AddSeconds(1),
                 selectedStartUtc,
                 selectedEndUtc,
-                TimeSpan.FromMinutes(queuedShout.IntervalMinutes));
+                TimeSpan.FromMinutes(queuedShout.IntervalMinutes),
+                allowRecentlyDueOccurrence: false);
         }
         else
         {
@@ -202,7 +210,7 @@ public sealed class EventShoutService : BaseService
         if (shouts.Count == 0)
             return [];
 
-        if (!this.Configuration.TryGetEventShoutWindow(out var eventStartUtc, out var eventEndUtc) || nowUtc < eventStartUtc || nowUtc >= eventEndUtc)
+        if (!this.Configuration.TryGetEventShoutWindow(out var eventStartUtc, out var eventEndUtc) || nowUtc < eventStartUtc || nowUtc > eventEndUtc.Add(DueShoutGrace))
             return [];
 
         foreach (var shout in shouts)
@@ -216,7 +224,7 @@ public sealed class EventShoutService : BaseService
             if (!this.nextShoutAtUtcByOrder.TryGetValue(shout.Order, out var next) ||
                 next <= DateTime.MinValue ||
                 next < shoutStartUtc ||
-                next >= shoutEndUtc)
+                next > shoutEndUtc)
             {
                 this.nextShoutAtUtcByOrder[shout.Order] = CalculateNextOccurrence(nowUtc, shoutStartUtc, shoutEndUtc, TimeSpan.FromMinutes(shout.IntervalMinutes));
             }
@@ -391,7 +399,7 @@ public sealed class EventShoutService : BaseService
 
         var selected = candidates
             .OrderBy(candidate => candidate.Start)
-            .FirstOrDefault(candidate => candidate.End > nowUtc);
+            .FirstOrDefault(candidate => candidate.End.Add(DueShoutGrace) >= nowUtc);
 
         if (selected.End <= selected.Start)
             return false;
@@ -405,13 +413,33 @@ public sealed class EventShoutService : BaseService
     /// Calculates the next interval boundary inside a shout's effective window.
     /// Returns <see cref="DateTime.MaxValue"/> when no future occurrence fits.
     /// </summary>
-    private static DateTime CalculateNextOccurrence(DateTime nowUtc, DateTime windowStartUtc, DateTime windowEndUtc, TimeSpan interval)
+    private static DateTime CalculateNextOccurrence(
+        DateTime nowUtc,
+        DateTime windowStartUtc,
+        DateTime windowEndUtc,
+        TimeSpan interval,
+        bool allowRecentlyDueOccurrence = true)
     {
         if (interval < TimeSpan.FromMinutes(1))
             interval = TimeSpan.FromMinutes(1);
 
         if (nowUtc <= windowStartUtc)
             return windowStartUtc;
+
+        if (allowRecentlyDueOccurrence && nowUtc <= windowEndUtc.Add(DueShoutGrace))
+        {
+            var elapsedTicksForPrevious = Math.Max(0, (nowUtc - windowStartUtc).Ticks);
+            var intervalTicksForPrevious = interval.Ticks;
+            var previousSteps = elapsedTicksForPrevious / intervalTicksForPrevious;
+            var previousCandidate = windowStartUtc.AddTicks(previousSteps * intervalTicksForPrevious);
+
+            if (previousCandidate >= windowStartUtc &&
+                previousCandidate <= windowEndUtc &&
+                nowUtc <= previousCandidate.Add(DueShoutGrace))
+            {
+                return previousCandidate;
+            }
+        }
 
         if (nowUtc >= windowEndUtc)
             return DateTime.MaxValue;
@@ -421,7 +449,7 @@ public sealed class EventShoutService : BaseService
         var steps = (elapsedTicks + intervalTicks - 1) / intervalTicks;
         var candidate = windowStartUtc.AddTicks(steps * intervalTicks);
 
-        return candidate < windowEndUtc ? candidate : DateTime.MaxValue;
+        return candidate <= windowEndUtc ? candidate : DateTime.MaxValue;
     }
 
     public readonly record struct UpcomingEventShout(EventShoutEntry Shout, DateTime? NextShoutAtUtc)
