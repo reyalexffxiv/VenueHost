@@ -1,3 +1,10 @@
+Venue Host 0.3.0.4
+
+- Rebuilt version metadata for the latest FFXIV/Dalamud patch-day release.
+- Hardened the package build script so it stops if dotnet build fails instead of packaging stale output.
+- Added release-time version checks across VenueHost.csproj, VenueHost.json, and pluginmaster.json.
+- Added package validation for required root files before publishing dist/VenueHost-latest.zip.
+
 Venue Host 0.3.0.3
 
 - Fixed Event Shouts auto timers so final boundary shouts, such as the last :45 shout in a row window, are not skipped if the framework tick lands slightly late.

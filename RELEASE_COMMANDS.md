@@ -20,6 +20,6 @@ Get-Content .\zipcheck\VenueHost.json
 git pull --rebase origin master
 git add .
 git add -f .\dist\VenueHost-latest.zip
-git commit -m "Contrast implementation plus minor bugfixes"
+git commit -m "Release Venue Host 0.3.0.4"
 git push
 ```
