@@ -20,15 +20,28 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     throw "Could not determine VenueHost version from $projectPath."
 }
 
+$versionCore = ($Version -split '-', 2)[0]
+if ($versionCore -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Expected a three-part semantic version, got '$Version'."
+}
+$expectedAssemblyVersion = "$versionCore.0"
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.AssemblyVersion -ne $Version) {
-    throw "Version mismatch: csproj Version is '$Version' but VenueHost.json AssemblyVersion is '$($manifest.AssemblyVersion)'."
+if ($manifest.AssemblyVersion -ne $expectedAssemblyVersion) {
+    throw "Version mismatch: expected '$expectedAssemblyVersion' but VenueHost.json AssemblyVersion is '$($manifest.AssemblyVersion)'."
 }
 
 $pluginMaster = Get-Content $pluginMasterPath -Raw | ConvertFrom-Json
 $pluginMasterVersion = @($pluginMaster)[0].AssemblyVersion
-if ($pluginMasterVersion -ne $Version) {
-    throw "Version mismatch: csproj Version is '$Version' but pluginmaster.json AssemblyVersion is '$pluginMasterVersion'."
+if ($pluginMasterVersion -ne $expectedAssemblyVersion) {
+    throw "Version mismatch: expected '$expectedAssemblyVersion' but pluginmaster.json AssemblyVersion is '$pluginMasterVersion'."
+}
+
+# Clean only the selected configuration. This prevents stale output DLLs from
+# an earlier SDK/package version silently entering the public plugin ZIP.
+Write-Host "Cleaning VenueHost ($Configuration)..."
+dotnet clean .\VenueHost.sln -c $Configuration
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet clean failed with exit code $LASTEXITCODE."
 }
 
 Write-Host "Building VenueHost $Version..."
@@ -45,7 +58,12 @@ New-Item -ItemType Directory -Force $dist | Out-Null
 
 # Dalamud expects the plugin files at the root of the zip. Do not zip the whole build folder,
 # otherwise nested folders or old latest.zip files can break installation/update.
-$buildRoot = Join-Path $repo "VenueHost\bin"
+$buildRoot = Join-Path $repo "VenueHost\bin\$Configuration"
+$builtDll = Get-ChildItem $buildRoot -Recurse -File -Filter 'VenueHost.dll' |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+if ($null -eq $builtDll) { throw "Compiled VenueHost.dll missing under $buildRoot" }
+$buildOutputDir = $builtDll.DirectoryName
 $requiredFileNames = @(
     "VenueHost.dll",
     "VenueHost.deps.json",
@@ -58,7 +76,7 @@ $requiredFileNames = @(
 )
 
 foreach ($fileName in $requiredFileNames) {
-    $file = Get-ChildItem $buildRoot -Recurse -Filter $fileName |
+    $file = Get-ChildItem $buildOutputDir -Recurse -File -Filter $fileName |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
@@ -70,8 +88,8 @@ foreach ($fileName in $requiredFileNames) {
 }
 
 $stagedManifest = Get-Content (Join-Path $stage "VenueHost.json") -Raw | ConvertFrom-Json
-if ($stagedManifest.AssemblyVersion -ne $Version) {
-    throw "Staged manifest version mismatch: expected '$Version', got '$($stagedManifest.AssemblyVersion)'."
+if ($stagedManifest.AssemblyVersion -ne $expectedAssemblyVersion) {
+    throw "Staged manifest version mismatch: expected '$expectedAssemblyVersion', got '$($stagedManifest.AssemblyVersion)'."
 }
 
 $zipPath = Join-Path $dist "VenueHost-latest.zip"

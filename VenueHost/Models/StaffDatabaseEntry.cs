@@ -12,6 +12,9 @@ public sealed class StaffDatabaseEntry
     [Newtonsoft.Json.JsonIgnore]
     public string RuntimeId { get; } = Guid.NewGuid().ToString("N");
 
+    /// <summary>Durable internal identity; display names remain the unique lookup key.</summary>
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
     public string Name { get; set; } = string.Empty;
 
     // Kept for beta config compatibility. The Staff Database UI no longer uses it.

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -8,716 +9,768 @@ using VenueHost.Services;
 namespace VenueHost.Windows;
 
 /// <summary>
-/// Settings and macro editor window.
-///
-/// This window intentionally keeps all configuration editing in one place.
-/// Setup and Macros are separate tabs because setup is quick operational state,
-/// while macros are larger text editors. Any setting changed here is saved
-/// immediately through Dalamud's plugin config path.
+/// Modern Setup: independent venue profiles, portable transfer, staff roles,
+/// global staff stagger, and global accessibility controls.
+/// Editing individual announcement macros belongs in Shouts.
 /// </summary>
 public sealed class ConfigWindow : Window, IDisposable
 {
-    private const float SettingsWindowWidth = 940f;
-    private const float SettingsWindowMinHeight = 720f;
-    private const float MacroEditorHeight = 115f;
-    private const float MacroEditorWidth = 760f;
-    private const float MacroPreviewWidth = 760f;
-
-    private readonly Configuration configuration;
+    private static readonly Vector2 WindowDimensions = new(850f, 748f);
+    private readonly Configuration config;
     private readonly IServiceContext services;
+    private string selectedProfileId = string.Empty;
+    private string newProfileName = string.Empty;
+    private string renameProfileName = string.Empty;
+    private string newRoleName = string.Empty;
+    private string renameRoleName = string.Empty;
+    private string lastRole = string.Empty;
+    private string status = string.Empty;
+    private bool statusIsError;
+    private enum ConfirmationView { None, ActivateVenue, DeleteVenue, RemoveRole, ImportVenue }
+    private ConfirmationView confirmation = ConfirmationView.None;
+    private bool confirmationFocusRequested;
+    private string confirmationProfileId = string.Empty;
+    private string confirmationProfileName = string.Empty;
+    private bool showImportPreview;
+    private string requestedRoleRemoval = string.Empty;
+    private PendingFileDialog? pendingFileDialog;
+    private bool fileDialogIsImport;
+    private string? exportingProfileId;
+    private string? importedFilePath;
+    private ProfileImportPreview? importPreview;
+    private bool updateImportedContacts;
+    private bool showShoutPriority;
+    private bool priorityFocusRequested;
 
-    /// <summary>Shared plugin configuration used by this window.</summary>
-    private Configuration Configuration => this.configuration;
-
-    /// <summary>Shared service context used to resolve plugin services.</summary>
-    private IServiceContext Services => this.services;
-
-    /// <summary>UI helper service for cross-window actions and shared UI assets.</summary>
-    private UiService Ui => this.Services.Get<UiService>();
-
-    /// <summary>Macro preview helper service.</summary>
-    private ShoutService Shout => this.Services.Get<ShoutService>();
-
-    /// <summary>Automatic DJ shout scheduler and status provider.</summary>
-    private DjAutoShoutService DjAutoShout => this.Services.Get<DjAutoShoutService>();
-
-    /// <summary>Automatic staff role shout scheduler and status provider.</summary>
-    private StaffAutoShoutService StaffAutoShout => this.Services.Get<StaffAutoShoutService>();
-
-    /// <summary>Native chat command queue/sender status provider.</summary>
-    private GameChatService Chat => this.Services.Get<GameChatService>();
-    private bool showVariables;
-    private string newStaffRoleName = string.Empty;
-    private string renameStaffRoleName = string.Empty;
-    private string renameStaffRoleSource = string.Empty;
-
-    private static readonly string[] AvailableVariables =
-    [
-        "{CurrentDJName}",
-        "{CurrentDJLink}",
-        "{DJName}",
-        "{DJLink}",
-        "{NextDJName}",
-        "{NextDJLink}",
-        "{VenueName}",
-        "{EventName}",
-        "{GiveawayText}",
-        "{GiveawayCommand}",
-        "{CommandText}",
-        "{GiveawayCommandLine}",
-        "{GiveawayLine}",
-        "{StartTime}",
-        "{EndTime}",
-        "{StaffSchedule}",
-        "{PhotographerNames}",
-        "{Role}",
-        "{StaffNames}",
-        "{StaffCount}",
-        "{IsAre}",
-        "{ShoutName}",
-        "{EventShoutName}",
-        "{CurrentTime}",
-        "{ServerTime}",
-    ];
+    private VenueProfileService Profiles => this.services.Get<VenueProfileService>();
+    private StaffAutoShoutService StaffAuto => this.services.Get<StaffAutoShoutService>();
+    private FileDialogService FileDialogs => this.services.Get<FileDialogService>();
 
     public ConfigWindow(Configuration configuration, IServiceContext services)
-        : base("Venue Host Settings###VenueHostSettings")
+        : base("VenueHost Setup###VenueHostSettings", ImGuiWindowFlags.NoTitleBar |
+            ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize |
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse |
+            ImGuiWindowFlags.NoBackground)
     {
-        this.configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-        this.services = services ?? throw new ArgumentNullException(nameof(services));
-        // Keep the settings layout stable horizontally while still allowing
-        // vertical expansion for longer macro and role configuration panels.
+        this.config = configuration;
+        this.services = services;
+        this.Size = WindowDimensions;
+        this.SizeCondition = ImGuiCond.Always;
         this.SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(SettingsWindowWidth, SettingsWindowMinHeight),
-            MaximumSize = new Vector2(SettingsWindowWidth, float.MaxValue),
+            MinimumSize = WindowDimensions, MaximumSize = WindowDimensions,
         };
+        this.AllowPinning = false;
     }
 
-    public void Dispose()
+    public void Dispose() { }
+
+    public override void PreDraw()
     {
+        this.Size = WindowDimensions;
+        this.SizeCondition = ImGuiCond.Always;
+        ImGui.SetNextWindowPos(BackstageDesign.CenteredOverMainWindow(this.services.Get<UiService>(), WindowDimensions), ImGuiCond.Appearing);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, BackstageDesign.Canvas);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, BackstageDesign.Surface);
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, BackstageDesign.Raised);
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.25f, 0.24f, 0.26f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, BackstageDesign.Raised);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.25f, 0.24f, 0.26f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.CheckMark, BackstageDesign.Mint);
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.26f, 0.21f, 0.19f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, BackstageDesign.Raised);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 14f);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 7f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 10f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 7f));
     }
 
-    /// <summary>
-    /// Keeps Settings at the designed width and minimum height.
-    /// Dalamud/ImGui may restore an older saved size before constraints apply,
-    /// so enforce the final visual contract at draw time without blocking taller layouts.
-    /// </summary>
-    private void EnforceSettingsWindowSize()
+    public override void PostDraw()
     {
-        var currentSize = ImGui.GetWindowSize();
-        var targetHeight = Math.Max(currentSize.Y, SettingsWindowMinHeight);
-
-        if (Math.Abs(currentSize.X - SettingsWindowWidth) <= 0.5f &&
-            Math.Abs(currentSize.Y - targetHeight) <= 0.5f)
-        {
-            return;
-        }
-
-        ImGui.SetWindowSize(new Vector2(SettingsWindowWidth, targetHeight));
-    }
-
-    /// <summary>Refreshes automatic shout timers after schedule or settings edits.</summary>
-    private void RefreshAutoShoutSchedule()
-    {
-        this.DjAutoShout.Refresh();
-        this.StaffAutoShout.Refresh();
+        ImGui.PopStyleVar(6);
+        ImGui.PopStyleColor(9);
     }
 
     public override void Draw()
     {
-        this.EnforceSettingsWindowSize();
-
-        using var contrast = UiTheme.PushContrastIfEnabled(this.Configuration.ContrastModeEnabled);
-
-        // Keep Settings as separate tabs instead of side-by-side panels.
-        // General is intentionally drawn first. The tab bar ID includes SetupFirst so old ImGui tab-order state from earlier beta builds cannot keep Macros first.
-        if (ImGui.BeginTabBar("VenueHostSettingsTabsGeneralFirst"))
+        using var palette = BackstageDesign.PushHighContrast(this.config.OverviewHighContrastPreviewEnabled);
+        using var contrast = UiTheme.PushContrastIfEnabled(this.config.OverviewHighContrastPreviewEnabled, preserveLayout: true);
+        this.PollDialog();
+        if (string.IsNullOrWhiteSpace(this.selectedProfileId) ||
+            !this.Profiles.Profiles.Any(p => p.Id == this.selectedProfileId))
         {
-            if (ImGui.BeginTabItem("General"))
-            {
-                this.DrawSetupPanel();
-                ImGui.EndTabItem();
-            }
+            this.selectedProfileId = this.Profiles.ActiveId;
+            this.renameProfileName = this.Profiles.Active.Name;
+        }
 
-            if (ImGui.BeginTabItem("DJ Lineup"))
-            {
-                this.DrawMacrosPanel();
-                ImGui.EndTabItem();
-            }
+        var origin = ImGui.GetWindowPos();
+        var size = ImGui.GetWindowSize();
+        var draw = ImGui.GetWindowDrawList();
+        BackstageDesign.Fill(draw, origin, size, BackstageDesign.Canvas, 14f);
+        BackstageDesign.Fill(draw, origin, new Vector2(size.X, 66f), BackstageDesign.Rail, 14f);
+        BackstageDesign.Fill(draw, origin + new Vector2(0f, 30f),
+            new Vector2(size.X, 36f), BackstageDesign.Rail);
+        BackstageDesign.Rule(draw, origin + new Vector2(0f, 65f),
+            origin + new Vector2(size.X, 65f), BackstageDesign.SoftLine);
+        draw.AddText(origin + new Vector2(22f, 24f),
+            BackstageDesign.Color(BackstageDesign.Gold), "VENUEHOST SETUP");
+        if (BackstageDesign.FlatButton("##vhSetupClose", "CLOSE",
+                origin + new Vector2(size.X - 100f, 16f), new Vector2(80f, 33f),
+                BackstageDesign.Muted))
+        {
+            this.CloseConfirmation();
+            this.showShoutPriority = false;
+            this.IsOpen = false;
+        }
+        ImGui.SetCursorScreenPos(origin + new Vector2(240f, 0f));
+        ImGui.InvisibleButton("##vhSetupDrag", new Vector2(size.X - 370f, 65f));
+        if (ImGui.IsItemActive())
+            ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta, ImGuiCond.Always);
 
-            if (ImGui.BeginTabItem("Staff Schedule"))
-            {
-                this.DrawStaffSchedulePanel();
-                ImGui.EndTabItem();
-            }
+        BackstageDesign.SurfacePanel(origin + new Vector2(18f, 80f), new Vector2(size.X - 36f, 280f));
+        BackstageDesign.SurfacePanel(origin + new Vector2(18f, 370f), new Vector2(size.X - 36f, 145f));
+        // Two compact independent controls at the bottom: venue-specific staff
+        // queue settings and the user-wide High Contrast display.
+        BackstageDesign.SurfacePanel(origin + new Vector2(18f, 525f), new Vector2(548f, 91f));
+        BackstageDesign.SurfacePanel(origin + new Vector2(578f, 525f), new Vector2(254f, 91f));
+        this.DrawProfiles(origin);
+        this.DrawRoles(origin);
+        this.DrawQueue(origin);
+        this.DrawAccessibility(origin);
+        BackstageDesign.SurfacePanel(origin + new Vector2(18f, 625f), new Vector2(size.X - 36f, 91f));
+        this.DrawAnnouncementControls(origin);
 
-            ImGui.EndTabBar();
+        if (!string.IsNullOrWhiteSpace(this.status))
+        {
+            var message = this.status.Length > 118 ? this.status[..115] + "..." : this.status;
+            draw.AddText(origin + new Vector2(22f, 729f),
+                BackstageDesign.Color(this.statusIsError ? BackstageDesign.Rose : BackstageDesign.Mint), message);
+        }
+        this.DrawConfirmations();
+        this.DrawShoutPriorityWindow(origin, size);
+    }
+
+    private void DrawAnnouncementControls(Vector2 p)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddText(p + new Vector2(36f, 641f), BackstageDesign.Color(BackstageDesign.Gold),
+            "ANNOUNCEMENT CONTROLS");
+        if (BackstageDesign.FlatButton("##vhSetupPriority", "SHOUT PRIORITY",
+                p + new Vector2(36f, 668f), new Vector2(161f, 32f), BackstageDesign.Gold))
+        {
+            this.showShoutPriority = true;
+            this.priorityFocusRequested = true;
+        }
+        var smart = this.config.SmartChatChannelsEnabled;
+        if (BackstageDesign.FlatButton("##vhSetupSmartChannels",
+                smart ? "SMART CHANNELS ON" : "SMART CHANNELS OFF",
+                p + new Vector2(207f, 668f), new Vector2(198f, 32f),
+                smart ? BackstageDesign.Mint : BackstageDesign.Muted, smart))
+        {
+            this.config.SmartChatChannelsEnabled = !smart;
+            this.config.Save();
         }
     }
 
-    private void DrawSetupPanel()
+    private void DrawProfiles(Vector2 p)
     {
-        var config = this.Configuration;
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddText(p + new Vector2(36f, 97f), BackstageDesign.Color(BackstageDesign.Gold), "VENUE PROFILES");
+        BackstageDesign.Rule(draw, p + new Vector2(34f, 119f), p + new Vector2(817f, 119f), BackstageDesign.SoftLine);
 
-        ImGui.TextUnformatted("Display");
-        ImGui.Separator();
-
-        var contrastMode = config.ContrastModeEnabled;
-        if (ImGui.Checkbox("Contrast Mode", ref contrastMode))
+        ImGui.SetCursorScreenPos(p + new Vector2(35f, 129f));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Vector4.Zero);
+        if (ImGui.BeginChild("##vhProfilesDirectory", new Vector2(273f, 158f), false))
         {
-            config.ContrastModeEnabled = contrastMode;
-            config.Save();
-        }
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Uses darker panels, brighter accents, and slightly larger text across Venue Host windows.");
-
-        ImGui.TextDisabled("Applies to Setup, Macros, DJ Lineup, and DJ Database windows.");
-        ImGui.TextDisabled("Uses neon-style accents and slightly larger text for stronger readability.");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-
-        ImGui.TextUnformatted("Commands");
-        ImGui.BulletText("/venuehost");
-        ImGui.BulletText("/vhost");
-        ImGui.BulletText("/venuehost settings");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextUnformatted("Chat Sending");
-        ImGui.TextWrapped("Venue Host sends queued native chat commands. Each macro line should usually be a complete FFXIV command like /y, /sh, /s, /em, or /tell.");
-        ImGui.TextWrapped("Use the compact wait controls for normal timing. Manual <wait.N> lines are still supported as one-off overrides.");
-
-        var showFallbackHelper = config.ShowChatSenderFallbackHelper;
-        if (ImGui.Checkbox("Show failed-command copy helper", ref showFallbackHelper))
-        {
-            config.ShowChatSenderFallbackHelper = showFallbackHelper;
-            config.Save();
-        }
-
-        if (ImGui.Button("Test chat sender", new Vector2(150, 24)))
-            this.Chat.QueueSenderTestCommand();
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Queues a harmless /e echo command. Use this after FFXIV or Dalamud patches.");
-
-        ImGui.SameLine();
-        ImGui.TextDisabled($"Pending: {this.Chat.PendingCommandCount}");
-        ImGui.TextWrapped($"Status: {this.Chat.LastStatus}");
-
-        if (config.ShowChatSenderFallbackHelper && this.Chat.HasFailedCommand && !string.IsNullOrWhiteSpace(this.Chat.LastFailedCommand))
-        {
-            ImGui.TextWrapped("Automatic chat sending failed. You can copy the failed command and paste it manually into chat.");
-
-            if (ImGui.Button("Copy failed command", new Vector2(170, 24)))
-                ImGui.SetClipboardText(this.Chat.LastFailedCommand);
-
-            ImGui.SameLine();
-            if (ImGui.Button("Clear failed command", new Vector2(170, 24)))
-                this.Chat.ClearFailedCommand();
-        }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextUnformatted("Rules / Notes");
-        ImGui.BulletText("FFXIV server time is treated as UTC.");
-        ImGui.BulletText("Blank Pick DJ rows are ignored by auto-shout and schedule checks.");
-        ImGui.BulletText("Manual buttons use the selected lineup row.");
-        ImGui.BulletText("Auto-shout uses the scheduled current DJ, not the manually selected row.");
-        ImGui.BulletText("Transition shouts are sent at the next DJ start time when a previous DJ exists.");
-
-        ImGui.Spacing();
-        if (ImGui.Button("Open DJ Lineup", new Vector2(150, 24)))
-            this.Ui.ToggleMainUi();
-    }
-
-    private void DrawMacrosPanel()
-    {
-        var config = this.Configuration;
-
-        ImGui.TextUnformatted("DJ Auto Shout");
-        ImGui.Separator();
-        ImGui.TextWrapped("Uses the DJ lineup schedule as FFXIV server time, which is UTC. Shouts are aligned to each DJ slot start, not to the moment you enable the option.");
-
-        var autoEnabled = config.AutoCurrentDjShoutEnabled;
-        if (ImGui.Checkbox("Enable automatic DJ shouts", ref autoEnabled))
-        {
-            config.AutoCurrentDjShoutEnabled = autoEnabled;
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        var intervalMinutes = config.AutoCurrentDjShoutIntervalMinutes;
-        if (this.DrawIntStepper("DJ auto-shout interval", ref intervalMinutes, 1, 120, 1, "min"))
-        {
-            config.AutoCurrentDjShoutIntervalMinutes = intervalMinutes;
-            config.ClampAutoShoutSettings();
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        ImGui.TextDisabled("Controls how often the scheduled current DJ is announced inside their slot.");
-        ImGui.TextWrapped($"Auto-shout status: {this.DjAutoShout.Status}");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextUnformatted("DJ Lineup Macros");
-        ImGui.Separator();
-
-        // Keep this guidance close to the editors. Macro editing is powerful,
-        // but most venue staff should only need to paste one chat command per line.
-        ImGui.TextWrapped("Edit the messages sent by DJ lineup buttons and auto-shouts. Use one full chat command per line, for example /y message or /sh message.");
-        ImGui.TextWrapped("Wait controls delay between macro lines. You do not need to add <wait.N> manually, though manual wait lines are still supported as one-off overrides.");
-        ImGui.TextWrapped("Variables in {curly braces} are replaced automatically when the macro runs.");
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Quick Actions");
-        if (ImGui.Button("Reset Default Macros", new Vector2(170, 24)))
-        {
-            config.ResetDefaultMacros();
-            config.Save();
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Remove Old Wait Lines", new Vector2(180, 24)))
-        {
-            if (config.RemoveManualWaitLinesFromMacros())
-                config.Save();
-        }
-
-        ImGui.SameLine();
-        var variablesButtonText = this.showVariables ? "Hide Variables" : "Show Variables";
-        if (ImGui.Button(variablesButtonText, new Vector2(130, 24)))
-            this.showVariables = !this.showVariables;
-
-        ImGui.TextDisabled("Remove Old Wait Lines removes standalone <wait.N> lines. The wait controls handle normal spacing now.");
-
-        if (this.showVariables)
-            this.DrawVariablesHelp();
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        this.DrawMacroEditor(
-            "Shout Current DJ Macro",
-            config.CurrentDjMacro,
-            value => config.CurrentDjMacro = value,
-            config.CurrentDjMacroDelaySeconds,
-            value => config.CurrentDjMacroDelaySeconds = value,
-            "##CurrentDjMacro");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        this.DrawMacroEditor(
-            "Thank Current / Welcome Next Macro",
-            config.TransitionMacro,
-            value => config.TransitionMacro = value,
-            config.TransitionMacroDelaySeconds,
-            value => config.TransitionMacroDelaySeconds = value,
-            "##TransitionMacro");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        this.DrawMacroEditor(
-            "Tell DJ to Target Macro",
-            config.TellCurrentDjMacro,
-            value => config.TellCurrentDjMacro = value,
-            config.TellCurrentDjMacroDelaySeconds,
-            value => config.TellCurrentDjMacroDelaySeconds = value,
-            "##TellCurrentDjMacro");
-
-        ImGui.Dummy(new Vector2(1, 14));
-    }
-
-
-    private void DrawStaffSchedulePanel()
-    {
-        var config = this.Configuration;
-        config.EnsureStaffRoleShoutSettings();
-
-        if (string.IsNullOrWhiteSpace(config.SelectedStaffRole))
-            config.SelectedStaffRole = config.GetKnownStaffRoles().FirstOrDefault() ?? "Photographer";
-
-        var selectedRole = config.SelectedStaffRole;
-        var roleSetting = config.GetOrCreateStaffRoleShoutSetting(selectedRole);
-
-        ImGui.TextUnformatted("Staff Schedule");
-        ImGui.Separator();
-        ImGui.TextWrapped("Create roles, tune role auto-shouts, and edit the shout macro used for each staff role.");
-
-        this.DrawStaffRoleManager(config);
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextUnformatted("Role Auto Shouts");
-        ImGui.Separator();
-
-        var staggerEnabled = config.AutoStaffRoleShoutStaggerEnabled;
-        if (ImGui.Checkbox("Stagger / queue automatic role shouts", ref staggerEnabled))
-        {
-            config.AutoStaffRoleShoutStaggerEnabled = staggerEnabled;
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        var staggerMinutes = config.AutoStaffRoleShoutStaggerMinutes;
-        if (this.DrawIntStepper("Stagger delay##StaffRoleStaggerDelay", ref staggerMinutes, 1, 30, 1, "min"))
-        {
-            config.AutoStaffRoleShoutStaggerMinutes = staggerMinutes;
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Role overview");
-        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(4f, 2f));
-        if (ImGui.BeginTable(
-                "StaffRoleAutoSummary",
-                3,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoHostExtendX))
-        {
-            ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthFixed, 150f);
-            ImGui.TableSetupColumn("Auto", ImGuiTableColumnFlags.WidthFixed, 55f);
-            ImGui.TableSetupColumn("Interval", ImGuiTableColumnFlags.WidthFixed, 75f);
-            ImGui.TableHeadersRow();
-            foreach (var setting in config.GetKnownStaffRoles().Select(config.GetOrCreateStaffRoleShoutSetting))
+            foreach (var profile in this.Profiles.Profiles)
             {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                if (ImGui.Selectable(setting.Role, string.Equals(config.SelectedStaffRole, setting.Role, StringComparison.OrdinalIgnoreCase), ImGuiSelectableFlags.SpanAllColumns))
-                {
-                    config.SelectedStaffRole = setting.Role;
-                    config.Save();
-                }
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(setting.AutoEnabled ? "ON" : "OFF");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted($"{setting.IntervalMinutes} min");
-            }
-            ImGui.EndTable();
-        }
-        ImGui.PopStyleVar();
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Edit selected role");
-
-        ImGui.SetNextItemWidth(180f);
-        if (ImGui.BeginCombo("Role##StaffAutoRole", config.SelectedStaffRole))
-        {
-            foreach (var role in config.GetKnownStaffRoles())
-            {
-                var selected = string.Equals(config.SelectedStaffRole, role, StringComparison.OrdinalIgnoreCase);
-                if (ImGui.Selectable(role, selected))
-                {
-                    config.SelectedStaffRole = role;
-                    config.GetOrCreateStaffRoleShoutSetting(role);
-                    config.Save();
-                }
+                ImGui.PushID(profile.Id);
+                var row = ImGui.GetCursorScreenPos();
+                var width = 253f;
+                var selected = profile.Id == this.selectedProfileId;
+                var active = profile.Id == this.Profiles.ActiveId;
+                var clicked = ImGui.InvisibleButton("##profilePick", new Vector2(width, 42f));
+                var hovered = ImGui.IsItemHovered();
+                var color = selected ? new Vector4(0.265f, 0.222f, 0.205f, 1f)
+                    : hovered ? BackstageDesign.Raised : BackstageDesign.Canvas;
+                BackstageDesign.Fill(ImGui.GetWindowDrawList(), row, new Vector2(width, 40f), color, 7f);
                 if (selected)
-                    ImGui.SetItemDefaultFocus();
+                    BackstageDesign.Fill(ImGui.GetWindowDrawList(), row, new Vector2(3f, 40f), BackstageDesign.Gold, 2f);
+                var label = profile.Name.Length > 23 ? profile.Name[..22] + "..." : profile.Name;
+                ImGui.GetWindowDrawList().AddText(row + new Vector2(12f, 12f),
+                    BackstageDesign.Color(selected ? BackstageDesign.Ivory : BackstageDesign.Muted), label);
+                if (active)
+                {
+                    var marker = "ACTIVE";
+                    var measure = ImGui.CalcTextSize(marker);
+                    ImGui.GetWindowDrawList().AddText(row + new Vector2(width - measure.X - 10f, 13f),
+                        BackstageDesign.Color(BackstageDesign.Mint), marker);
+                }
+                if (clicked)
+                {
+                    this.selectedProfileId = profile.Id;
+                    this.renameProfileName = profile.Name;
+                }
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 4f);
+                ImGui.PopID();
             }
-            ImGui.EndCombo();
         }
-
-        selectedRole = config.SelectedStaffRole;
-        roleSetting = config.GetOrCreateStaffRoleShoutSetting(selectedRole);
-
-        var autoEnabled = roleSetting.AutoEnabled;
-        if (ImGui.Checkbox($"Enable automatic {roleSetting.Role} shouts", ref autoEnabled))
-        {
-            roleSetting.AutoEnabled = autoEnabled;
-            // Keep the dedicated Photographer compatibility fields aligned with role settings.
-            if (roleSetting.Role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
-                config.AutoPhotographerShoutEnabled = autoEnabled;
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        var intervalMinutes = roleSetting.IntervalMinutes;
-        if (this.DrawIntStepper($"Interval##{roleSetting.Role}StaffAutoInterval", ref intervalMinutes, 1, 120, 1, "min"))
-        {
-            roleSetting.IntervalMinutes = intervalMinutes;
-            if (roleSetting.Role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
-                config.AutoPhotographerShoutIntervalMinutes = intervalMinutes;
-            config.Save();
-            this.RefreshAutoShoutSchedule();
-        }
-
-        var next = this.StaffAutoShout.GetNextShoutAtUtc(roleSetting.Role);
-        ImGui.TextDisabled(next.HasValue ? $"Next shout: {next.Value:HH:mm:ss} ST / UTC" : "Next shout: none");
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextUnformatted($"Role Shout Macro: {config.SelectedStaffRole}");
-        ImGui.SameLine();
-        if (ImGui.Button($"Reset {config.SelectedStaffRole} Macro##ResetStaffRoleMacro", new Vector2(180, 24)))
-        {
-            config.SetStaffShoutMacro(config.SelectedStaffRole, config.GetDefaultStaffShoutMacro(config.SelectedStaffRole));
-            config.SetStaffShoutDelaySeconds(config.SelectedStaffRole, 2f);
-            config.Save();
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Show Variables##StaffRoleVariables", new Vector2(130, 24)))
-            this.showVariables = !this.showVariables;
-
-        this.DrawMacroEditor(
-            $"##StaffRoleMacroEditorTitle{config.SelectedStaffRole}",
-            config.GetStaffShoutMacro(config.SelectedStaffRole),
-            value => config.SetStaffShoutMacro(config.SelectedStaffRole, value),
-            config.GetStaffShoutDelaySeconds(config.SelectedStaffRole),
-            value => config.SetStaffShoutDelaySeconds(config.SelectedStaffRole, value),
-            "##StaffRoleShoutMacro");
-
-        ImGui.TextDisabled("Available variables: {VenueName}, {EventName}, {Role}, {StaffNames}, {StaffCount}, {IsAre}");
-        if (this.showVariables)
-            this.DrawVariablesHelp();
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted($"Preview using current active {config.SelectedStaffRole} staff");
-        var previewWidth = MathF.Min(ImGui.GetContentRegionAvail().X, MacroPreviewWidth);
-        ImGui.BeginChild("StaffRoleMacroPreview", new Vector2(previewWidth, 88), true, ImGuiWindowFlags.None);
-        ImGui.TextWrapped(this.Shout.PreviewSelectedStaffRoleShout());
         ImGui.EndChild();
-    }
-
-
-    private void DrawStaffRoleManager(Configuration config)
-    {
-        config.EnsureStaffRoles();
-
-        ImGui.TextUnformatted("Staff Roles");
-        ImGui.Separator();
-        ImGui.TextWrapped("Create, rename, or remove roles used by Staff Database, Staff Schedule rows, and role shout macros.");
-
-        ImGui.TextUnformatted("New role");
-        ImGui.SetNextItemWidth(220f);
-        ImGui.InputText("##NewStaffRole", ref this.newStaffRoleName, 80);
-        ImGui.SameLine();
-        if (ImGui.Button("Add Role", new Vector2(110, 24)))
-        {
-            if (config.AddStaffRole(this.newStaffRoleName))
+        ImGui.PopStyleColor();
+        InputAt("##vhNewProfile", "New venue name", ref this.newProfileName, 80,
+            p + new Vector2(36f, 300f), 174f);
+        if (BackstageDesign.FlatButton("##vhNewProfileButton", "+ CREATE", p + new Vector2(219f, 299f),
+                new Vector2(89f, 33f), BackstageDesign.Mint))
+            this.Try(() =>
             {
-                config.SelectedStaffRole = this.newStaffRoleName.Trim();
-                this.newStaffRoleName = string.Empty;
-                this.RefreshAutoShoutSchedule();
-            }
+                var created = this.Profiles.CreateEmpty(this.newProfileName);
+                this.newProfileName = string.Empty;
+                this.selectedProfileId = created.Id;
+                this.renameProfileName = created.Name;
+                return "New venue created. Select ACTIVATE to use it.";
+            });
+
+        var isActive = this.selectedProfileId == this.Profiles.ActiveId;
+        draw.AddText(p + new Vector2(335f, 139f), BackstageDesign.Color(BackstageDesign.Dim),
+            "RENAME SELECTED VENUE");
+        InputAt("##vhRenameProfile", "New venue name", ref this.renameProfileName, 80,
+            p + new Vector2(335f, 163f), 314f);
+        if (BackstageDesign.FlatButton("##vhRenameProfileButton", "RENAME", p + new Vector2(661f, 162f),
+                new Vector2(151f, 34f), BackstageDesign.Mist))
+            this.Try(() => { this.Profiles.Rename(this.selectedProfileId, this.renameProfileName); return "Venue profile renamed."; });
+
+        if (!isActive)
+        {
+            if (BackstageDesign.FlatButton("##vhActivateProfile", "ACTIVATE SELECTED", p + new Vector2(335f, 236f),
+                    new Vector2(227f, 35f), BackstageDesign.Gold))
+                this.OpenConfirmation(ConfirmationView.ActivateVenue);
+            if (BackstageDesign.FlatButton("##vhDeleteProfile", "DELETE SELECTED", p + new Vector2(574f, 236f),
+                    new Vector2(238f, 35f), BackstageDesign.Rose))
+                this.OpenConfirmation(ConfirmationView.DeleteVenue);
         }
 
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Selected role");
-
-        if (string.IsNullOrWhiteSpace(config.SelectedStaffRole))
-            config.SelectedStaffRole = config.GetKnownStaffRoles().FirstOrDefault() ?? "Photographer";
-
-        ImGui.SetNextItemWidth(180f);
-        if (ImGui.BeginCombo("##SelectedStaffRoleForRename", config.SelectedStaffRole))
+        if (BackstageDesign.FlatButton("##vhExportSelected", "EXPORT SELECTED", p + new Vector2(335f, 296f),
+                new Vector2(227f, 35f), BackstageDesign.Mist))
+            this.StartExport();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Exports the selected venue and the complete shared DJ and Staff directories.");
+        if (BackstageDesign.FlatButton("##vhImportVenue", "IMPORT VENUE", p + new Vector2(574f, 296f),
+                new Vector2(238f, 35f), BackstageDesign.Mint))
         {
-            foreach (var role in config.GetKnownStaffRoles())
+            this.pendingFileDialog = this.FileDialogs.ShowOpenProfileDialog("Import VenueHost venue profile");
+            this.fileDialogIsImport = true;
+        }
+    }
+
+    private void DrawRoles(Vector2 p)
+    {
+        this.config.EnsureStaffRoles();
+        this.config.EnsureStaffRoleShoutSettings();
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddText(p + new Vector2(36f, 386f), BackstageDesign.Color(BackstageDesign.Gold), "STAFF ROLES");
+        BackstageDesign.Rule(draw, p + new Vector2(35f, 408f), p + new Vector2(817f, 408f), BackstageDesign.SoftLine);
+
+        InputAt("##vhNewRole", "New role name", ref this.newRoleName, 80, p + new Vector2(36f, 420f), 260f);
+        if (BackstageDesign.FlatButton("##vhAddRole", "+ ADD ROLE", p + new Vector2(305f, 419f),
+                new Vector2(130f, 34f), BackstageDesign.Mint))
+            this.Try(() =>
             {
-                var selected = string.Equals(config.SelectedStaffRole, role, StringComparison.OrdinalIgnoreCase);
-                if (ImGui.Selectable(role, selected))
+                if (!this.config.AddStaffRole(this.newRoleName)) throw new InvalidOperationException("Role already exists or is invalid.");
+                this.config.SelectedStaffRole = this.newRoleName.Trim();
+                this.newRoleName = string.Empty;
+                this.StaffAuto.Refresh();
+                return "Role added to this venue.";
+            });
+
+        var roles = this.config.GetKnownStaffRoles();
+        if (string.IsNullOrWhiteSpace(this.config.SelectedStaffRole) || !roles.Contains(this.config.SelectedStaffRole))
+            this.config.SelectedStaffRole = roles.FirstOrDefault() ?? "Photographer";
+        if (this.lastRole != this.config.SelectedStaffRole)
+        {
+            this.lastRole = this.config.SelectedStaffRole;
+            this.renameRoleName = string.Empty;
+        }
+        if (BackstageDesign.RoleSelector("##vhSetupStaffRole", this.config.SelectedStaffRole,
+                roles, p + new Vector2(36f, 465f), new Vector2(190f, 33f), out var chosenRole))
+        {
+            this.config.SelectedStaffRole = chosenRole;
+            this.config.Save();
+        }
+        InputAt("##vhRenameRole", "New name for selected role", ref this.renameRoleName, 80,
+            p + new Vector2(238f, 465f), 245f);
+        if (BackstageDesign.FlatButton("##vhRenameRoleBtn", "RENAME", p + new Vector2(494f, 464f),
+                new Vector2(146f, 34f), BackstageDesign.Mist))
+            this.Try(() =>
+            {
+                if (!this.config.RenameStaffRole(this.config.SelectedStaffRole, this.renameRoleName))
+                    throw new InvalidOperationException("Role rename was rejected. Check for duplicate names.");
+                this.lastRole = this.config.SelectedStaffRole;
+                this.renameRoleName = string.Empty;
+                this.StaffAuto.Refresh();
+                return "Role renamed for this venue.";
+            });
+        if (roles.Count > 1 && BackstageDesign.FlatButton("##vhRemoveRoleBtn", "REMOVE ROLE", p + new Vector2(650f, 464f),
+                new Vector2(162f, 34f), BackstageDesign.Rose))
+        {
+            this.requestedRoleRemoval = this.config.SelectedStaffRole;
+            this.OpenConfirmation(ConfirmationView.RemoveRole);
+        }
+    }
+
+    private void DrawQueue(Vector2 p)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddText(p + new Vector2(36f, 541f), BackstageDesign.Color(BackstageDesign.Gold), "AUTOMATIC SHOUT STAGGER");
+        var enabled = this.config.AutoStaffRoleShoutStaggerEnabled;
+        if (BackstageDesign.FlatButton("##vhStaggerToggle", enabled ? "ON" : "OFF",
+                p + new Vector2(36f, 567f), new Vector2(68f, 31f), enabled ? BackstageDesign.Mint : BackstageDesign.Muted, enabled))
+        {
+            this.config.AutoStaffRoleShoutStaggerEnabled = !enabled;
+            this.config.Save();
+            this.StaffAuto.Refresh();
+        }
+        draw.AddText(p + new Vector2(136f, 574f), BackstageDesign.Color(BackstageDesign.Dim), "DELAY");
+        var delay = this.config.AutoStaffRoleShoutStaggerMinutes;
+        if (BackstageDesign.FlatButton("##vhDelayLess", "-", p + new Vector2(183f, 567f),
+                new Vector2(31f, 32f), BackstageDesign.Mist) && delay > 1)
+        {
+            this.config.AutoStaffRoleShoutStaggerMinutes = delay - 1;
+            this.config.Save();
+            this.StaffAuto.Refresh();
+        }
+        var delayText = $"{delay} min";
+        draw.AddText(p + new Vector2(221f, 574f), BackstageDesign.Color(BackstageDesign.Ivory), delayText);
+        if (BackstageDesign.FlatButton("##vhDelayMore", "+", p + new Vector2(287f, 567f),
+                new Vector2(34f, 32f), BackstageDesign.Mist) && delay < 30)
+        {
+            this.config.AutoStaffRoleShoutStaggerMinutes = delay + 1;
+            this.config.Save();
+            this.StaffAuto.Refresh();
+        }
+    }
+
+    private void DrawAccessibility(Vector2 p)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddText(p + new Vector2(596f, 541f), BackstageDesign.Color(BackstageDesign.Gold), "ACCESSIBILITY");
+
+        // One user-wide High Contrast option, applied across VenueHost.
+        // Venue profile switches and portable event exports exclude this setting.
+        var enabled = this.config.OverviewHighContrastPreviewEnabled;
+        if (BackstageDesign.FlatButton("##vhOverviewContrast",
+                $"HIGH CONTRAST: {(enabled ? "ON" : "OFF")}",
+                p + new Vector2(596f, 567f), new Vector2(216f, 32f),
+                enabled ? BackstageDesign.Mint : BackstageDesign.Muted, enabled))
+        {
+            this.config.OverviewHighContrastPreviewEnabled = !enabled;
+            this.config.Save();
+        }
+    }
+
+    private void DrawShoutPriorityWindow(Vector2 ownerPosition, Vector2 ownerSize)
+    {
+        if (!this.showShoutPriority) return;
+        var config = this.config;
+        config.EnsureShoutPriority();
+        var options = config.GetPriorityOptions().ToDictionary(x => x.Key, x => x.Label,
+            StringComparer.OrdinalIgnoreCase);
+        var rows = config.ShoutPriority.ToList();
+        const float width = 545f;
+        var height = MathF.Min(610f, 88f + rows.Count * 43f);
+        height = MathF.Max(210f, height);
+        var size = new Vector2(width, height);
+        ImGui.SetNextWindowSize(size, ImGuiCond.Always);
+        ImGui.SetNextWindowPos(BackstageDesign.CenteredWindowPosition(ownerPosition, ownerSize, size), ImGuiCond.Appearing);
+        if (this.priorityFocusRequested)
+        {
+            ImGui.SetNextWindowFocus();
+            this.priorityFocusRequested = false;
+        }
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, BackstageDesign.Canvas);
+        ImGui.PushStyleColor(ImGuiCol.Border, BackstageDesign.SoftLine);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 13f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1f);
+        if (ImGui.Begin("Shout Priority##vhPriorityWindow",
+                ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings |
+                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+        {
+            var p = ImGui.GetWindowPos();
+            var dl = ImGui.GetWindowDrawList();
+            BackstageDesign.Fill(dl, p, new Vector2(width, 58f), BackstageDesign.Rail, 12f);
+            BackstageDesign.Rule(dl, p + new Vector2(0f, 57f), p + new Vector2(width, 57f), BackstageDesign.SoftLine);
+            ImGui.SetCursorScreenPos(p + new Vector2(20f, 19f));
+            ImGui.TextColored(BackstageDesign.Gold, "SHOUT PRIORITY");
+            if (BackstageDesign.FlatButton("##vhPriorityClose", "CLOSE", p + new Vector2(width - 109f, 13f), new Vector2(90f, 30f), BackstageDesign.Muted))
+                this.showShoutPriority = false;
+            ImGui.SetCursorScreenPos(p + new Vector2(175f, 0f));
+            ImGui.InvisibleButton("##vhPriorityDrag", new Vector2(width - 300f, 57f));
+            if (ImGui.IsItemActive())
+                ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetIO().MouseDelta);
+
+            ImGui.SetCursorScreenPos(p + new Vector2(18f, 69f));
+            if (ImGui.BeginChild("##vhPriorityRows", new Vector2(width - 36f, height - 83f), false))
+            {
+                for (var i = 0; i < rows.Count; i++)
                 {
-                    config.SelectedStaffRole = role;
-                    config.Save();
+                    ImGui.PushID(i);
+                    var key = rows[i];
+                    var row = ImGui.GetCursorScreenPos();
+                    var rowWidth = ImGui.GetContentRegionAvail().X - 5f;
+                    BackstageDesign.Fill(ImGui.GetWindowDrawList(), row,
+                        new Vector2(rowWidth, 36f), BackstageDesign.Raised, 7f);
+                    var label = options.TryGetValue(key, out var displayName) ? displayName : key;
+                    ImGui.PushClipRect(row + new Vector2(12f, 2f),
+                        row + new Vector2(rowWidth - 110f, 34f), true);
+                    ImGui.GetWindowDrawList().AddText(row + new Vector2(12f, 10f),
+                        BackstageDesign.Color(BackstageDesign.Ivory), $"{i + 1}.  {label}");
+                    ImGui.PopClipRect();
+                    if (i == 0) ImGui.BeginDisabled();
+                    if (BackstageDesign.FlatButton("##vhPriorityUp", "UP", row + new Vector2(rowWidth - 94f, 4f), new Vector2(41f, 28f), BackstageDesign.Muted) && i > 0)
+                    {
+                        (config.ShoutPriority[i - 1], config.ShoutPriority[i]) =
+                            (config.ShoutPriority[i], config.ShoutPriority[i - 1]);
+                        config.Save();
+                    }
+                    if (i == 0) ImGui.EndDisabled();
+                    if (i == rows.Count - 1) ImGui.BeginDisabled();
+                    if (BackstageDesign.FlatButton("##vhPriorityDown", "DOWN", row + new Vector2(rowWidth - 48f, 4f), new Vector2(44f, 28f), BackstageDesign.Muted) && i < rows.Count - 1)
+                    {
+                        (config.ShoutPriority[i + 1], config.ShoutPriority[i]) =
+                            (config.ShoutPriority[i], config.ShoutPriority[i + 1]);
+                        config.Save();
+                    }
+                    if (i == rows.Count - 1) ImGui.EndDisabled();
+                    ImGui.SetCursorScreenPos(row + new Vector2(0f, 42f));
+                    ImGui.Dummy(new Vector2(1f, 1f));
+                    ImGui.PopID();
                 }
-                if (selected)
-                    ImGui.SetItemDefaultFocus();
             }
-            ImGui.EndCombo();
+            ImGui.EndChild();
         }
-
-        if (!string.Equals(this.renameStaffRoleSource, config.SelectedStaffRole, StringComparison.Ordinal))
-        {
-            this.renameStaffRoleSource = config.SelectedStaffRole;
-            this.renameStaffRoleName = config.SelectedStaffRole;
-        }
-
-        ImGui.SameLine();
-        ImGui.TextUnformatted("Rename to");
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(220f);
-        ImGui.InputText("##RenameStaffRole", ref this.renameStaffRoleName, 80);
-        ImGui.SameLine();
-        if (ImGui.Button("Save Rename", new Vector2(125, 24)))
-        {
-            if (config.RenameStaffRole(this.renameStaffRoleSource, this.renameStaffRoleName))
-            {
-                this.renameStaffRoleSource = config.SelectedStaffRole;
-                this.renameStaffRoleName = config.SelectedStaffRole;
-                this.RefreshAutoShoutSchedule();
-            }
-        }
-
-        ImGui.SameLine();
-        var canRemove = config.GetKnownStaffRoles().Count > 1;
-        if (!canRemove)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Remove Role", new Vector2(120, 24)))
-        {
-            if (config.RemoveStaffRole(config.SelectedStaffRole))
-            {
-                this.renameStaffRoleSource = config.SelectedStaffRole;
-                this.renameStaffRoleName = config.SelectedStaffRole;
-                this.RefreshAutoShoutSchedule();
-            }
-        }
-
-        if (!canRemove)
-            ImGui.EndDisabled();
-
+        ImGui.End();
+        ImGui.PopStyleVar(3);
+        ImGui.PopStyleColor(2);
     }
 
-    private void DrawVariablesHelp()
+    private static void InputAt(string id, string hint, ref string value, int maxLength, Vector2 position, float width)
     {
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Available variables");
+        ImGui.SetCursorScreenPos(position);
+        ImGui.SetNextItemWidth(width);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(10f, 9f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, BackstageDesign.Raised);
+        ImGui.InputTextWithHint(id, hint, ref value, maxLength);
+        ImGui.PopStyleColor();
+        ImGui.PopStyleVar();
+    }
 
-        if (ImGui.BeginTable("##VariablesTable", 3, ImGuiTableFlags.SizingStretchSame))
+    private void OpenConfirmation(ConfirmationView view)
+    {
+        this.confirmation = view;
+        this.confirmationFocusRequested = true;
+        if (view == ConfirmationView.ActivateVenue || view == ConfirmationView.DeleteVenue)
         {
-            for (var i = 0; i < AvailableVariables.Length; i++)
-            {
-                if (i % 3 == 0)
-                    ImGui.TableNextRow();
-
-                ImGui.TableSetColumnIndex(i % 3);
-                ImGui.TextUnformatted(AvailableVariables[i]);
-            }
-
-            ImGui.EndTable();
+            // Keep a stable target even if the user changes the selected row while the
+            // non-modal confirmation is visible.
+            this.confirmationProfileId = this.selectedProfileId;
+            this.confirmationProfileName = this.Profiles.Profiles
+                .First(p => p.Id == this.selectedProfileId).Name;
         }
     }
 
-    private void DrawMacroEditor(
-        string title,
-        string macroText,
-        Action<string> setMacroText,
-        float delaySeconds,
-        Action<float> setDelaySeconds,
-        string inputId)
+    private void CloseConfirmation()
     {
-        if (!title.StartsWith("##", StringComparison.Ordinal))
-            ImGui.TextUnformatted(title);
-
-        var editedDelay = delaySeconds;
-        if (this.DrawFloatStepper($"Wait between lines##{inputId}", ref editedDelay, 0f, 10f, 0.5f, "sec"))
-        {
-            setDelaySeconds(editedDelay);
-            this.Configuration.Save();
-        }
-
-        var editedMacro = macroText ?? string.Empty;
-        var editorWidth = MathF.Min(ImGui.GetContentRegionAvail().X, MacroEditorWidth);
-        ImGui.SetNextItemWidth(editorWidth);
-        if (ImGui.InputTextMultiline(inputId, ref editedMacro, 8000, new Vector2(editorWidth, MacroEditorHeight)))
-        {
-            setMacroText(editedMacro);
-            this.Configuration.Save();
-        }
-    }
-
-    private static string StripImGuiId(string label)
-    {
-        var markerIndex = label.IndexOf("##", StringComparison.Ordinal);
-        return markerIndex >= 0 ? label[..markerIndex] : label;
+        if (this.confirmation == ConfirmationView.ImportVenue)
+            this.ClearImport();
+        this.confirmation = ConfirmationView.None;
+        this.confirmationFocusRequested = false;
     }
 
     /// <summary>
-    /// Draws a compact numeric stepper for integer settings.
-    /// This avoids wide sliders for simple values like the auto-shout interval.
+    /// Confirmation is a regular small ImGui window positioned over Setup, not a modal
+    /// popup. The game and other windows stay usable; no full-screen dimming layer.
     /// </summary>
-    private bool DrawIntStepper(string label, ref int value, int min, int max, int step, string suffix)
+    private void DrawConfirmations()
     {
-        var changed = false;
-        var inputValue = value;
-        var displayLabel = StripImGuiId(label);
-
-        ImGui.PushID(label);
-        ImGui.SetNextItemWidth(70);
-        if (ImGui.InputInt("##value", ref inputValue, 0, 0))
+        if (this.showImportPreview && this.importPreview is not null && this.importedFilePath is not null)
         {
-            value = Math.Clamp(inputValue, min, max);
-            changed = true;
+            this.showImportPreview = false;
+            this.OpenConfirmation(ConfirmationView.ImportVenue);
         }
+        if (this.confirmation == ConfirmationView.None) return;
 
-        ImGui.SameLine();
-        if (ImGui.Button("-", new Vector2(28, 0)))
+        var isImport = this.confirmation == ConfirmationView.ImportVenue;
+        var dimensions = isImport ? new Vector2(630f, 372f) : new Vector2(480f, 226f);
+        var setupPosition = ImGui.GetWindowPos();
+        var setupSize = ImGui.GetWindowSize();
+        ImGui.SetNextWindowSize(dimensions, ImGuiCond.Always);
+        ImGui.SetNextWindowPos(BackstageDesign.CenteredWindowPosition(setupPosition, setupSize, dimensions), ImGuiCond.Always);
+        if (this.confirmationFocusRequested)
         {
-            value = Math.Clamp(value - step, min, max);
-            changed = true;
+            ImGui.SetNextWindowFocus();
+            this.confirmationFocusRequested = false;
         }
-
-        ImGui.SameLine();
-        if (ImGui.Button("+", new Vector2(28, 0)))
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, BackstageDesign.Canvas);
+        ImGui.PushStyleColor(ImGuiCol.Border, BackstageDesign.SoftLine);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 12f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 1f);
+        var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoMove |
+            ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse |
+            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoScrollbar |
+            ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoDocking;
+        if (ImGui.Begin("Setup confirmation###vhNonModalSetupConfirmation", flags))
         {
-            value = Math.Clamp(value + step, min, max);
-            changed = true;
+            var p = ImGui.GetWindowPos();
+            var draw = ImGui.GetWindowDrawList();
+            BackstageDesign.Fill(draw, p, new Vector2(dimensions.X, 60f), BackstageDesign.Rail, 12f);
+            BackstageDesign.Fill(draw, p + new Vector2(0f, 30f), new Vector2(dimensions.X, 30f), BackstageDesign.Rail);
+            BackstageDesign.Rule(draw, p + new Vector2(0f, 59f),
+                p + new Vector2(dimensions.X, 59f), BackstageDesign.SoftLine);
+            var heading = this.confirmation switch
+            {
+                ConfirmationView.ActivateVenue => "ACTIVATE VENUE",
+                ConfirmationView.DeleteVenue => "DELETE VENUE",
+                ConfirmationView.RemoveRole => "REMOVE STAFF ROLE",
+                ConfirmationView.ImportVenue => "IMPORT VENUE",
+                _ => string.Empty,
+            };
+            draw.AddText(p + new Vector2(20f, 22f), BackstageDesign.Color(BackstageDesign.Gold), heading);
+            if (BackstageDesign.FlatButton("##vhConfirmClose", "CLOSE",
+                    p + new Vector2(dimensions.X - 94f, 13f), new Vector2(75f, 33f), BackstageDesign.Muted))
+                this.CloseConfirmation();
+
+            // Calling the action updates the state, but we finish drawing this window
+            // before ImGui.End() so its window stack stays balanced.
+            switch (this.confirmation)
+            {
+                case ConfirmationView.ActivateVenue:
+                    this.DrawActivateConfirmation(p, dimensions);
+                    break;
+                case ConfirmationView.DeleteVenue:
+                    this.DrawDeleteConfirmation(p, dimensions);
+                    break;
+                case ConfirmationView.RemoveRole:
+                    this.DrawRemoveRoleConfirmation(p, dimensions);
+                    break;
+                case ConfirmationView.ImportVenue:
+                    this.DrawImportConfirmation(p, dimensions);
+                    break;
+            }
         }
-
-        ImGui.SameLine();
-        ImGui.TextUnformatted($"{displayLabel} ({suffix})");
-        ImGui.PopID();
-
-        return changed;
+        ImGui.End();
+        ImGui.PopStyleVar(3);
+        ImGui.PopStyleColor(2);
     }
 
-    /// <summary>
-    /// Draws a compact numeric stepper for macro wait values.
-    /// Macro waits intentionally use half-second steps because venue shouts
-    /// rarely need fine-grained timing.
-    /// </summary>
-    private bool DrawFloatStepper(string label, ref float value, float min, float max, float step, string suffix)
+    private static void ConfirmationText(Vector2 position, string message, float wrapWidth, Vector4 color)
     {
-        var changed = false;
-        var inputValue = value;
-        var displayLabel = StripImGuiId(label);
-
-        ImGui.PushID(label);
-        ImGui.SetNextItemWidth(70);
-        if (ImGui.InputFloat("##value", ref inputValue, 0f, 0f, "%.1f"))
-        {
-            value = Math.Clamp(inputValue, min, max);
-            changed = true;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("-", new Vector2(28, 0)))
-        {
-            value = Math.Clamp(value - step, min, max);
-            changed = true;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("+", new Vector2(28, 0)))
-        {
-            value = Math.Clamp(value + step, min, max);
-            changed = true;
-        }
-
-        ImGui.SameLine();
-        ImGui.TextUnformatted($"{displayLabel} ({suffix})");
-        ImGui.PopID();
-
-        return changed;
+        ImGui.SetCursorScreenPos(position);
+        ImGui.PushTextWrapPos(position.X + wrapWidth);
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        ImGui.TextWrapped(message);
+        ImGui.PopStyleColor();
+        ImGui.PopTextWrapPos();
     }
+
+    private void DrawActivateConfirmation(Vector2 p, Vector2 size)
+    {
+        ConfirmationText(p + new Vector2(20f, 78f),
+            $"Switch to {this.confirmationProfileName}?", size.X - 40f, BackstageDesign.Ivory);
+        ConfirmationText(p + new Vector2(20f, 106f),
+            "Pending chat commands will be cleared and automation paused. " +
+            "The selected venue's schedules and macros will load; all profiles and shared people are preserved.",
+            size.X - 40f, BackstageDesign.Muted);
+        if (BackstageDesign.FlatButton("##vhConfirmSwitch", "SWITCH VENUE", p + new Vector2(20f, size.Y - 52f),
+                new Vector2(205f, 34f), BackstageDesign.Gold))
+        {
+            if (this.Try(() =>
+                {
+                    this.Profiles.Switch(this.confirmationProfileId);
+                    this.lastRole = string.Empty;
+                    return string.Empty;
+                }))
+            {
+                this.status = string.Empty;
+                this.CloseConfirmation();
+            }
+        }
+        if (BackstageDesign.FlatButton("##vhCancelSwitch", "CANCEL", p + new Vector2(size.X - 146f, size.Y - 52f),
+                new Vector2(126f, 34f), BackstageDesign.Muted))
+            this.CloseConfirmation();
+    }
+
+    private void DrawDeleteConfirmation(Vector2 p, Vector2 size)
+    {
+        ConfirmationText(p + new Vector2(20f, 78f),
+            $"Delete {this.confirmationProfileName}?", size.X - 40f, BackstageDesign.Ivory);
+        ConfirmationText(p + new Vector2(20f, 106f),
+            "This permanently removes the inactive venue and its saved event data. " +
+            "Shared DJ and Staff records remain unchanged. Export first if you may need this venue again.",
+            size.X - 40f, BackstageDesign.Muted);
+        if (BackstageDesign.FlatButton("##vhConfirmDelete", "DELETE VENUE", p + new Vector2(20f, size.Y - 52f),
+                new Vector2(205f, 34f), BackstageDesign.Rose))
+        {
+            if (this.Try(() =>
+                {
+                    this.Profiles.Delete(this.confirmationProfileId);
+                    this.selectedProfileId = this.Profiles.ActiveId;
+                    this.renameProfileName = this.Profiles.Active.Name;
+                    return "Inactive venue profile deleted.";
+                }))
+                this.CloseConfirmation();
+        }
+        if (BackstageDesign.FlatButton("##vhCancelDelete", "CANCEL", p + new Vector2(size.X - 146f, size.Y - 52f),
+                new Vector2(126f, 34f), BackstageDesign.Muted))
+            this.CloseConfirmation();
+    }
+
+    private void DrawRemoveRoleConfirmation(Vector2 p, Vector2 size)
+    {
+        ConfirmationText(p + new Vector2(20f, 78f),
+            $"Remove '{this.requestedRoleRemoval}'?", size.X - 40f, BackstageDesign.Ivory);
+        ConfirmationText(p + new Vector2(20f, 106f),
+            "Existing shifts using this role will be reassigned. This venue's role macro and timer " +
+            "will be removed, but the shared Staff Database will not change.",
+            size.X - 40f, BackstageDesign.Muted);
+        if (BackstageDesign.FlatButton("##vhConfirmRemoveRole", "REMOVE ROLE", p + new Vector2(20f, size.Y - 52f),
+                new Vector2(205f, 34f), BackstageDesign.Rose))
+        {
+            if (this.Try(() =>
+                {
+                    if (!this.config.RemoveStaffRole(this.requestedRoleRemoval))
+                        throw new InvalidOperationException("Could not remove role.");
+                    this.lastRole = string.Empty;
+                    this.StaffAuto.Refresh();
+                    return "Venue role removed and affected shifts reassigned.";
+                }))
+                this.CloseConfirmation();
+        }
+        if (BackstageDesign.FlatButton("##vhCancelRole", "CANCEL", p + new Vector2(size.X - 146f, size.Y - 52f),
+                new Vector2(126f, 34f), BackstageDesign.Muted))
+            this.CloseConfirmation();
+    }
+
+    private void DrawImportConfirmation(Vector2 p, Vector2 size)
+    {
+        var preview = this.importPreview;
+        if (preview is null || this.importedFilePath is null)
+        {
+            this.CloseConfirmation();
+            return;
+        }
+        ConfirmationText(p + new Vector2(20f, 74f), preview.Name, size.X - 40f, BackstageDesign.Ivory);
+        ConfirmationText(p + new Vector2(20f, 103f),
+            $"{preview.DjCount} DJs  ·  {preview.DjSlotCount} DJ slots  ·  {preview.StaffCount} saved staff",
+            size.X - 40f, BackstageDesign.Muted);
+        ConfirmationText(p + new Vector2(20f, 126f),
+            $"{preview.ShiftCount} shifts  ·  {preview.RoleCount} roles  ·  {preview.ShoutCount} custom shouts",
+            size.X - 40f, BackstageDesign.Muted);
+        ConfirmationText(p + new Vector2(20f, 157f),
+            $"Contact differences: {preview.ConflictingDjs} DJ(s), {preview.ConflictingStaff} staff",
+            size.X - 40f, BackstageDesign.Gold);
+        ImGui.SetCursorScreenPos(p + new Vector2(20f, 188f));
+        ImGui.Checkbox("Update existing contacts when names match", ref this.updateImportedContacts);
+        ConfirmationText(p + new Vector2(20f, 219f),
+            "Unchecked keeps your shared contacts. Checked replaces matching details with imported values.",
+            size.X - 40f, BackstageDesign.Dim);
+        BackstageDesign.Rule(ImGui.GetWindowDrawList(), p + new Vector2(20f, 256f),
+            p + new Vector2(size.X - 20f, 256f), BackstageDesign.SoftLine);
+        ConfirmationText(p + new Vector2(20f, 269f),
+            "Import as New preserves other venues; Replace Active saves a recovery copy first. " +
+            "Automation stays paused.", size.X - 40f, BackstageDesign.Muted);
+        if (BackstageDesign.FlatButton("##vhImportAsNew", "IMPORT AS NEW", p + new Vector2(20f, size.Y - 52f),
+                new Vector2(178f, 34f), BackstageDesign.Mint))
+        {
+            if (this.Try(() =>
+                {
+                    var imported = this.Profiles.ImportNew(this.importedFilePath!, this.updateImportedContacts);
+                    this.selectedProfileId = imported.Id;
+                    this.renameProfileName = imported.Name;
+                    return "Imported as a separate venue. Automation PAUSED; use ACTIVATE to switch.";
+                }))
+                this.CloseConfirmation();
+        }
+        if (BackstageDesign.FlatButton("##vhImportReplace", "REPLACE ACTIVE", p + new Vector2(210f, size.Y - 52f),
+                new Vector2(178f, 34f), BackstageDesign.Rose))
+        {
+            if (this.Try(() =>
+                {
+                    this.Profiles.ReplaceActiveFromImport(this.importedFilePath!, this.updateImportedContacts);
+                    this.lastRole = string.Empty;
+                    return "Active venue replaced; recovery backup saved. Automation PAUSED.";
+                }))
+                this.CloseConfirmation();
+        }
+        if (BackstageDesign.FlatButton("##vhImportCancel", "CANCEL", p + new Vector2(size.X - 140f, size.Y - 52f),
+                new Vector2(120f, 34f), BackstageDesign.Muted))
+            this.CloseConfirmation();
+        if (this.statusIsError)
+            ConfirmationText(p + new Vector2(20f, size.Y - 76f), this.status, size.X - 40f, BackstageDesign.Rose);
+    }
+
+    private void StartExport()
+    {
+        var selected = this.Profiles.Profiles.First(p => p.Id == this.selectedProfileId);
+        this.exportingProfileId = selected.Id;
+        var safeName = string.Concat(selected.Name.Select(c =>
+            Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        this.pendingFileDialog = this.FileDialogs.ShowSaveProfileDialog("Export selected VenueHost profile", safeName + ".venuehost");
+        this.fileDialogIsImport = false;
+    }
+
+    private void PollDialog()
+    {
+        if (this.pendingFileDialog is null || !this.pendingFileDialog.TryGetResult(out var path, out var exception))
+            return;
+        this.pendingFileDialog = null;
+        if (exception is not null)
+        {
+            this.SetStatus(exception.Message, true);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            this.exportingProfileId = null;
+            return;
+        }
+        if (this.fileDialogIsImport)
+            this.Try(() =>
+            {
+                this.importPreview = this.Profiles.InspectImport(path);
+                this.importedFilePath = path;
+                this.showImportPreview = true;
+                return "Profile validated. Review the import confirmation.";
+            });
+        else
+            this.Try(() =>
+            {
+                this.Profiles.ExportSelected(this.exportingProfileId ?? this.selectedProfileId, path);
+                this.exportingProfileId = null;
+                return "Selected venue exported with the shared DJ and staff directories.";
+            });
+    }
+
+    private void ClearImport()
+    {
+        this.importPreview = null;
+        this.importedFilePath = null;
+        this.showImportPreview = false;
+        this.updateImportedContacts = false;
+    }
+
+    private bool Try(Func<string> action)
+    {
+        try { this.SetStatus(action(), false); return true; }
+        catch (Exception ex) { this.SetStatus(ex.Message, true); return false; }
+    }
+
+    private void SetStatus(string message, bool error)
+    {
+        this.status = message;
+        this.statusIsError = error;
+    }
+
 }

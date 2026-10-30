@@ -1,24 +1,31 @@
-# Build output
-bin/
-obj/
-release/
-
-# Generated Dalamud package staging
-*.nupkg
-
-# User/local files
-*.user
-*.suo
+# Local/build artifacts
+**/bin/
+**/obj/
+/release/
 .vs/
 .idea/
+*.user
+*.suo
 *.DotSettings.user
+*.nupkg
+*.pdb
 
-# OS/editor noise
+# Keep only the shipped compiled plugin package
+/dist/*
+!/dist/VenueHost-latest.zip
+
+# Internal documentation, backups, caches, and editor files
+/docs/dev/
+/BUILD_AFTER_UNZIP.txt
+/zipcheck/
+/venv/
+/.venv/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+latest.zip
+*.bak
+*.backup
 .DS_Store
 Thumbs.db
-
-# Local packaging/check folders
-zipcheck/
-
-# Downloaded Dalamud runtime zip
-latest.zip

@@ -3,12 +3,15 @@ using System;
 namespace VenueHost.Models;
 
 /// <summary>
-/// One staff schedule row. Rows use the Staff Schedule window to become
-/// date-aware, just like DJ rows, but multiple staff members may overlap.
+/// One staff schedule row. Its HH:mm times are resolved inside the event
+/// window, just like DJ rows, but multiple staff members may overlap.
 /// </summary>
 [Serializable]
 public sealed class StaffScheduleEntry
 {
+    /// <summary>Optional link to the shared directory; legacy name-based rows remain supported.</summary>
+    public string PersonId { get; set; } = string.Empty;
+
     public int Order { get; set; }
 
     public string Name { get; set; } = string.Empty;
@@ -28,4 +31,3 @@ public sealed class StaffScheduleEntry
     /// </summary>
     public bool Available { get; set; } = true;
 }
-

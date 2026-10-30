@@ -59,10 +59,22 @@ public sealed class DjAutoShoutService : BaseService
             : "Disabled.";
     }
 
+    /// <summary>Keep remaining time across a temporary pause without resetting DJ selection.</summary>
+    public void ResumeAfterPause(DateTime nowUtc, TimeSpan elapsed)
+    {
+        if (this.nextAutoCurrentDjShoutAtUtc > DateTime.MinValue &&
+            this.nextAutoCurrentDjShoutAtUtc < DateTime.MaxValue)
+        {
+            var shifted = this.nextAutoCurrentDjShoutAtUtc.Add(elapsed);
+            this.nextAutoCurrentDjShoutAtUtc = shifted > nowUtc
+                ? shifted : this.CalculateNextAutoShoutUtc(nowUtc.AddSeconds(1));
+        }
+    }
+
     /// <summary>
     /// Runs one DJ auto-shout scheduler tick. This is called from the Dalamud framework update.
     /// </summary>
-    public void Update()
+    public void Update(bool dispatch = true)
     {
         var config = this.Configuration;
         config.ClampAutoShoutSettings();
@@ -105,6 +117,8 @@ public sealed class DjAutoShoutService : BaseService
             this.Status = $"Enabled. Using event window, {activeText}. Next shout at {this.nextAutoCurrentDjShoutAtUtc:yyyy-MM-dd HH:mm:ss} ST.";
             return;
         }
+
+        if (!dispatch) return;
 
         if (this.Chat.HasPendingCommands)
         {
@@ -159,6 +173,19 @@ public sealed class DjAutoShoutService : BaseService
         }
 
         this.Status = $"Sent current DJ shout for {currentDj.DJName}. Next at {FormatServerTime(this.nextAutoCurrentDjShoutAtUtc)}.";
+    }
+
+    public string? GetDuePriorityKey(DateTime nowUtc)
+    {
+        var when = this.NextShoutAtUtc;
+        if (!this.Configuration.AutoCurrentDjShoutEnabled || !when.HasValue || when > nowUtc)
+            return null;
+        var dj = this.Configuration.GetCurrentServerTimeDj(when.Value);
+        if (dj is null) return "dj:current"; // Let Update advance an expired/empty slot.
+        var previous = this.Configuration.GetPreviousDjBefore(dj);
+        var slot = this.Configuration.GetTimelineSlotForEntry(dj);
+        return previous is not null && slot is not null && IsScheduledSlotStart(when.Value, slot)
+            ? "dj:handoff" : "dj:current";
     }
 
     /// <summary>Returns the UI label for the next planned automatic DJ shout.</summary>

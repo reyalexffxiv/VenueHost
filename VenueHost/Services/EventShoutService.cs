@@ -10,8 +10,8 @@ namespace VenueHost.Services;
 /// Owns manual and automatic event/custom shouts.
 /// </summary>
 /// <remarks>
-/// Event shouts are venue-wide custom macros. Automatic timing follows the event
-/// shout window so a saved timer cannot keep shouting outside the planned window.
+/// Event shouts are venue-wide custom macros. Automatic timing follows the event's
+/// dates, with same-day pre-party flexibility and per-shout HH:mm windows.
 /// </remarks>
 public sealed class EventShoutService : BaseService
 {
@@ -63,8 +63,37 @@ public sealed class EventShoutService : BaseService
         this.Status = "Event shout timers refreshed.";
     }
 
+    /// <summary>Preserve scheduled intervals across pause; never replay stale queued occurrences.</summary>
+    public void ResumeAfterPause(DateTime nowUtc, TimeSpan elapsed)
+    {
+        this.pendingEventShoutQueue.Clear();
+        foreach (var order in this.nextShoutAtUtcByOrder.Keys.ToList())
+        {
+            var next = this.nextShoutAtUtcByOrder[order];
+            if (next == DateTime.MinValue || next == DateTime.MaxValue)
+                continue;
+            var shifted = next.Add(elapsed);
+            if (shifted <= nowUtc)
+            {
+                var shout = this.Configuration.EventShouts?.FirstOrDefault(item => item.Order == order);
+                if (shout is not null && this.Configuration.TryGetEventShoutWindow(out var start, out var end) &&
+                    TryGetEffectiveShoutWindow(shout, start, end, nowUtc,
+                        out var effectiveStart, out var effectiveEnd))
+                    shifted = CalculateNextOccurrence(nowUtc.AddSeconds(1), effectiveStart, effectiveEnd,
+                        TimeSpan.FromMinutes(Math.Clamp(shout.IntervalMinutes, 1, 120)),
+                        allowRecentlyDueOccurrence: false);
+                else
+                    shifted = DateTime.MaxValue;
+            }
+            this.nextShoutAtUtcByOrder[order] = shifted;
+        }
+        if (this.nextEventShoutAllowedAtUtc > DateTime.MinValue &&
+            this.nextEventShoutAllowedAtUtc < DateTime.MaxValue)
+            this.nextEventShoutAllowedAtUtc = this.nextEventShoutAllowedAtUtc.Add(elapsed);
+    }
+
     /// <summary>Runs one event-shout scheduler tick. Called from the Dalamud framework update.</summary>
-    public void Update()
+    public void Update(bool dispatch = true, int? requestedOrder = null)
     {
         var config = this.Configuration;
         config.EnsureEventShoutDefaults();
@@ -124,6 +153,8 @@ public sealed class EventShoutService : BaseService
             return;
         }
 
+        if (!dispatch) return;
+
         if (this.Chat.HasPendingCommands)
         {
             this.Status = $"Waiting for queued chat to finish before event shout: {queuedShout.Name}. Pending: {this.Chat.PendingCommandCount}.";
@@ -136,6 +167,13 @@ public sealed class EventShoutService : BaseService
             return;
         }
 
+        if (requestedOrder.HasValue && queuedShout.Order != requestedOrder.Value)
+        {
+            queuedShout = enabledShouts.FirstOrDefault(item => item.Order == requestedOrder.Value &&
+                this.pendingEventShoutQueue.Contains(item.Order));
+            if (queuedShout is null || !TryGetEffectiveShoutWindow(queuedShout, eventStartUtc, eventEndUtc, nowUtc, out _, out _))
+                return;
+        }
         this.pendingEventShoutQueue.Remove(queuedShout.Order);
         this.SendEventShout(queuedShout);
         if (TryGetEffectiveShoutWindow(queuedShout, eventStartUtc, eventEndUtc, nowUtc, out var selectedStartUtc, out var selectedEndUtc))
@@ -156,14 +194,18 @@ public sealed class EventShoutService : BaseService
         this.Status = $"Sent custom shout: {queuedShout.Name}. Next queued shout allowed at {this.nextEventShoutAllowedAtUtc:HH:mm:ss} ST.";
     }
 
+    public bool CanDispatchNow(DateTime nowUtc) => nowUtc >= this.nextEventShoutAllowedAtUtc;
+
+    public IReadOnlyList<int> PendingOrders => this.pendingEventShoutQueue;
+
     /// <summary>Queues the selected event shout manually.</summary>
     public void SendSelectedEventShout()
     {
-        this.SendEventShout(this.Configuration.GetSelectedEventShout());
+        this.SendEventShout(this.Configuration.GetSelectedEventShout(), isManual: true);
     }
 
     /// <summary>Queues a specific event shout manually or from the timer.</summary>
-    public void SendEventShout(EventShoutEntry? entry)
+    public void SendEventShout(EventShoutEntry? entry, bool isManual = false)
     {
         if (!Configuration.HasUsableEventShout(entry))
             return;
@@ -172,7 +214,11 @@ public sealed class EventShoutService : BaseService
             entry!.Macro,
             this.Configuration.BuildEventShoutVariables(entry));
 
-        this.Chat.QueueMacroCommands(expandedMacro, TimeSpan.FromSeconds(entry.DelaySeconds));
+        var delay = TimeSpan.FromSeconds(entry.DelaySeconds);
+        if (isManual)
+            this.Chat.QueueManualMacroCommands(expandedMacro, delay);
+        else
+            this.Chat.QueueMacroCommands(expandedMacro, delay);
     }
 
     /// <summary>Returns the selected event shout macro after variable expansion.</summary>
@@ -203,46 +249,67 @@ public sealed class EventShoutService : BaseService
     /// This method projects the staggered send times so the UI preview matches the
     /// real FIFO queue instead of showing every due shout at the same raw timestamp.
     /// </summary>
-    public IReadOnlyList<UpcomingEventShout> GetUpcomingEventShouts(int limit = 8)
+    public IReadOnlyList<UpcomingEventShout> GetUpcomingEventShouts(int limit = 8, DateTime? asOfUtc = null)
     {
-        var nowUtc = DateTime.UtcNow;
-        var shouts = this.Configuration.GetAutoEnabledEventShouts().ToList();
+        // Observation must not affect execution. The old preview called QueueDueShouts
+        // and edited both scheduling dictionaries and the live FIFO queue. Keep the
+        // same projection algorithm, but operate exclusively on local copies.
+        limit = Math.Clamp(limit, 1, 20);
+        var nowUtc = asOfUtc ?? DateTime.UtcNow;
+        var shouts = (this.Configuration.EventShouts ?? [])
+            .Where(entry => Configuration.HasUsableEventShout(entry) && entry.AutoEnabled)
+            .OrderBy(entry => entry.Order)
+            .ToList();
         if (shouts.Count == 0)
             return [];
 
-        if (!this.Configuration.TryGetEventShoutWindow(out var eventStartUtc, out var eventEndUtc) || nowUtc < eventStartUtc || nowUtc > eventEndUtc.Add(DueShoutGrace))
+        // Read the same event-derived limits used by the live scheduler.
+        // Pre-event promotions may run earlier on event day (or the prior
+        // evening for events that start shortly after midnight).
+        var config = this.Configuration;
+        if (!config.TryGetEventShoutWindow(out var eventStartUtc, out var eventEndUtc) ||
+            nowUtc > eventEndUtc.Add(DueShoutGrace))
             return [];
+
+        var projectedTimes = new Dictionary<int, DateTime>(this.nextShoutAtUtcByOrder);
+        var projectedQueue = this.pendingEventShoutQueue
+            .Where(order => shouts.Any(shout => shout.Order == order))
+            .Distinct()
+            .ToList();
 
         foreach (var shout in shouts)
         {
             if (!TryGetEffectiveShoutWindow(shout, eventStartUtc, eventEndUtc, nowUtc, out var shoutStartUtc, out var shoutEndUtc))
             {
-                this.nextShoutAtUtcByOrder[shout.Order] = DateTime.MaxValue;
+                projectedTimes[shout.Order] = DateTime.MaxValue;
                 continue;
             }
 
-            if (!this.nextShoutAtUtcByOrder.TryGetValue(shout.Order, out var next) ||
-                next <= DateTime.MinValue ||
-                next < shoutStartUtc ||
-                next > shoutEndUtc)
+            if (!projectedTimes.TryGetValue(shout.Order, out var next) ||
+                next <= DateTime.MinValue || next < shoutStartUtc || next > shoutEndUtc)
             {
-                this.nextShoutAtUtcByOrder[shout.Order] = CalculateNextOccurrence(nowUtc, shoutStartUtc, shoutEndUtc, TimeSpan.FromMinutes(shout.IntervalMinutes));
+                projectedTimes[shout.Order] = CalculateNextOccurrence(
+                    nowUtc, shoutStartUtc, shoutEndUtc, TimeSpan.FromMinutes(shout.IntervalMinutes));
             }
         }
 
-        this.QueueDueShouts(shouts, nowUtc);
+        // Reproduce the scheduler's due-time order, without adding to its real queue.
+        var due = shouts
+            .Where(shout => projectedTimes.TryGetValue(shout.Order, out var next) &&
+                            next != DateTime.MaxValue && nowUtc >= next && !projectedQueue.Contains(shout.Order))
+            .OrderBy(shout => projectedTimes[shout.Order])
+            .ThenBy(shout => shout.Order);
+
+        foreach (var shout in due)
+            projectedQueue.Add(shout.Order);
 
         var result = new List<UpcomingEventShout>();
         var displayTime = nowUtc > this.nextEventShoutAllowedAtUtc ? nowUtc : this.nextEventShoutAllowedAtUtc;
-
-        foreach (var order in this.pendingEventShoutQueue.ToList())
+        foreach (var order in projectedQueue)
         {
             var shout = shouts.FirstOrDefault(item => item.Order == order);
-            if (shout is null)
-            {
-                this.pendingEventShoutQueue.Remove(order);
+            if (shout is null || projectedTimes.GetValueOrDefault(order, DateTime.MaxValue) == DateTime.MaxValue)
                 continue;
-            }
 
             result.Add(new UpcomingEventShout(shout, displayTime));
             displayTime = displayTime.Add(EventShoutQueueSpacing);
@@ -257,8 +324,10 @@ public sealed class EventShoutService : BaseService
                 : DateTime.MinValue;
 
         foreach (var item in shouts
-                     .Where(shout => !this.pendingEventShoutQueue.Contains(shout.Order))
-                     .Select(shout => new UpcomingEventShout(shout, this.GetNextShoutAtUtc(shout)))
+                     .Where(shout => !projectedQueue.Contains(shout.Order))
+                     .Select(shout => new UpcomingEventShout(shout,
+                         projectedTimes.TryGetValue(shout.Order, out var next) && next != DateTime.MaxValue
+                             ? next : null))
                      .Where(item => item.NextShoutAtUtc.HasValue)
                      .OrderBy(item => item.NextShoutAtUtc)
                      .ThenBy(item => item.Shout.Order))
@@ -275,6 +344,70 @@ public sealed class EventShoutService : BaseService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Read-only multi-occurrence forecast for the Overview. The existing preview
+    /// supplies the first queued/scheduled occurrence per shout; further occurrences
+    /// follow each row's interval boundaries. Never modifies timers or chat queues.
+    /// Future dispatch may move when chat is busy, automation is paused, or settings change.
+    /// </summary>
+    public IReadOnlyList<UpcomingEventShout> GetUpcomingEventShoutForecast(DateTime nowUtc, int limit = 16)
+    {
+        limit = Math.Clamp(limit, 1, 20);
+        var firstOccurrences = this.GetUpcomingEventShouts(20, nowUtc);
+        if (firstOccurrences.Count == 0)
+            return [];
+
+        // Preview the next instances of recurring shouts without inserting them
+        // into the real scheduler's per-order FIFO or time dictionaries.
+        var config = this.Configuration;
+        if (!config.TryGetEventShoutWindow(out var startUtc, out var endUtc))
+            return [];
+
+        var candidates = new List<(EventShoutEntry Shout, DateTime At, int Priority)>();
+        var priority = 0;
+        foreach (var item in firstOccurrences)
+        {
+            if (item.NextShoutAtUtc is not { } firstAt || firstAt < nowUtc)
+                continue;
+
+            // First instances retain the real FIFO estimate from the base preview.
+            candidates.Add((item.Shout, firstAt, priority++));
+            if (!TryGetEffectiveShoutWindow(item.Shout, startUtc, endUtc, nowUtc,
+                    out var rowStart, out var rowEnd))
+                continue;
+
+            var interval = TimeSpan.FromMinutes(Math.Clamp(item.Shout.IntervalMinutes, 1, 240));
+            // The first forecast occurrence might have been delayed by queue
+            // staggering. Advance from its projected send time, aligning every
+            // later candidate back to the row's interval grid.
+            var next = CalculateNextOccurrence(firstAt.AddTicks(1), rowStart, rowEnd,
+                interval, allowRecentlyDueOccurrence: false);
+            for (var n = 0; n < limit && next != DateTime.MaxValue; n++)
+            {
+                candidates.Add((item.Shout, next, priority++));
+                next = CalculateNextOccurrence(next.AddTicks(1), rowStart, rowEnd,
+                    interval, allowRecentlyDueOccurrence: false);
+            }
+        }
+
+        // Stagger adjacent announcements even when several recurrence schedules
+        // collide. This is an ETA, not a promise that the chat command was sent.
+        var results = new List<UpcomingEventShout>(limit);
+        var lastSent = DateTime.MinValue;
+        foreach (var candidate in candidates.OrderBy(item => item.At).ThenBy(item => item.Priority))
+        {
+            var at = candidate.At;
+            if (lastSent != DateTime.MinValue && at < lastSent.Add(EventShoutQueueSpacing))
+                at = lastSent.Add(EventShoutQueueSpacing);
+            results.Add(new UpcomingEventShout(candidate.Shout, at));
+            lastSent = at;
+            if (results.Count == limit)
+                break;
+        }
+
+        return results;
     }
 
     private (EventShoutEntry Shout, DateTime Next)? GetNextScheduledPair(IEnumerable<EventShoutEntry> enabledShouts)

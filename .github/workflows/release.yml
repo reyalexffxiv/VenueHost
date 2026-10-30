@@ -40,7 +40,7 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag .\dist\VenueHost-latest.zip --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes "Venue Host beta release." --prerelease
+            gh release create $tag .\dist\VenueHost-latest.zip --repo $env:GITHUB_REPOSITORY --title "Venue Host $tag" --notes-file .\CHANGELOG.md --prerelease
           } else {
             gh release upload $tag .\dist\VenueHost-latest.zip --repo $env:GITHUB_REPOSITORY --clobber
           }

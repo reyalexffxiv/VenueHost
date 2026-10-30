@@ -21,6 +21,36 @@ public sealed class FileDialogService : BaseService
     {
     }
 
+    public PendingFileDialog ShowSaveProfileDialog(string title, string defaultPath)
+        => PendingFileDialog.Start(() =>
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Title = title,
+                Filter = "VenueHost profiles (*.venuehost)|*.venuehost",
+                AddExtension = true,
+                DefaultExt = "venuehost",
+                FileName = Path.GetFileName(defaultPath),
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                OverwritePrompt = true,
+            };
+            return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
+        });
+
+    public PendingFileDialog ShowOpenProfileDialog(string title)
+        => PendingFileDialog.Start(() =>
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Title = title,
+                Filter = "VenueHost profiles (*.venuehost)|*.venuehost",
+                CheckFileExists = true,
+                Multiselect = false,
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            };
+            return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
+        });
+
     /// <summary>
     /// Starts a native Save File dialog and returns a pending result handle.
     /// </summary>

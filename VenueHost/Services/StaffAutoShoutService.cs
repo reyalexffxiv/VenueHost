@@ -42,6 +42,36 @@ public sealed class StaffAutoShoutService : BaseService
         this.nextAllowedAutoStaffRoleShoutAtUtc = DateTime.MinValue;
     }
 
+    /// <summary>Preserve timers across downtime and drop stale pending role actions.</summary>
+    public void ResumeAfterPause(DateTime nowUtc, TimeSpan elapsed)
+    {
+        this.pendingStaffRoleQueue.Clear();
+        foreach (var role in this.nextAutoStaffShoutAtUtc.Keys.ToList())
+        {
+            var next = this.nextAutoStaffShoutAtUtc[role];
+            if (next == DateTime.MinValue || next == DateTime.MaxValue)
+                continue;
+            var shifted = next.Add(elapsed);
+            if (shifted <= nowUtc)
+            {
+                var setting = this.Configuration.GetAutoEnabledStaffRoleShoutSettings()
+                    .FirstOrDefault(item => string.Equals(item.Role, role, StringComparison.OrdinalIgnoreCase));
+                var slots = this.GetCurrentSlotsForRole(nowUtc, role);
+                var nextSlot = this.Configuration.GetNextStaffScheduleTimelineSlotForRole(nowUtc, role);
+                shifted = setting is not null && slots.Count > 0
+                    ? GetNextAlignedStaffShoutAt(nowUtc.AddSeconds(1), slots.Min(slot => slot.StartUtc), setting.IntervalMinutes)
+                    : nextSlot?.StartUtc ?? DateTime.MinValue;
+            }
+            if (shifted == DateTime.MinValue)
+                this.nextAutoStaffShoutAtUtc.Remove(role);
+            else
+                this.nextAutoStaffShoutAtUtc[role] = shifted;
+        }
+        if (this.nextAllowedAutoStaffRoleShoutAtUtc > DateTime.MinValue &&
+            this.nextAllowedAutoStaffRoleShoutAtUtc < DateTime.MaxValue)
+            this.nextAllowedAutoStaffRoleShoutAtUtc = this.nextAllowedAutoStaffRoleShoutAtUtc.Add(elapsed);
+    }
+
     /// <summary>
     /// Returns the next planned automatic shout for a role, or <c>null</c> when none is scheduled.
     /// </summary>
@@ -142,7 +172,7 @@ public sealed class StaffAutoShoutService : BaseService
     /// <summary>
     /// Runs one staff role auto-shout scheduler tick. This is called from the Dalamud framework update.
     /// </summary>
-    public void Update()
+    public void Update(bool dispatch = true, string? requestedRole = null)
     {
         var config = this.Configuration;
         config.EnsureStaffRoleShoutSettings();
@@ -174,6 +204,7 @@ public sealed class StaffAutoShoutService : BaseService
             .ToList();
 
         this.QueueDueRoles(dueSettings);
+        if (!dispatch) return;
         if (this.pendingStaffRoleQueue.Count == 0)
             return;
 
@@ -190,7 +221,7 @@ public sealed class StaffAutoShoutService : BaseService
             return;
         }
 
-        var due = this.GetNextQueuedDueRole(enabledSettings, nowUtc);
+        var due = this.GetNextQueuedDueRole(enabledSettings, nowUtc, requestedRole);
         if (due is null)
             return;
 
@@ -206,6 +237,11 @@ public sealed class StaffAutoShoutService : BaseService
             this.nextAllowedAutoStaffRoleShoutAtUtc = nowUtc.AddMinutes(config.AutoStaffRoleShoutStaggerMinutes);
     }
 
+    public bool CanDispatchNow(DateTime nowUtc) =>
+        !this.Configuration.AutoStaffRoleShoutStaggerEnabled || nowUtc >= this.nextAllowedAutoStaffRoleShoutAtUtc;
+
+    public IReadOnlyList<string> PendingRoles => this.pendingStaffRoleQueue;
+
     private void QueueDueRoles(IEnumerable<DueStaffRole> dueSettings)
     {
         foreach (var due in dueSettings)
@@ -215,23 +251,25 @@ public sealed class StaffAutoShoutService : BaseService
         }
     }
 
-    private DueStaffRole? GetNextQueuedDueRole(IReadOnlyCollection<StaffRoleShoutSetting> enabledSettings, DateTime nowUtc)
+    private DueStaffRole? GetNextQueuedDueRole(IReadOnlyCollection<StaffRoleShoutSetting> enabledSettings, DateTime nowUtc, string? requestedRole = null)
     {
         while (this.pendingStaffRoleQueue.Count > 0)
         {
-            var role = this.pendingStaffRoleQueue[0];
+            var role = requestedRole is null ? this.pendingStaffRoleQueue[0] : requestedRole;
+            if (requestedRole is not null && !this.pendingStaffRoleQueue.Contains(role, StringComparer.OrdinalIgnoreCase))
+                return null;
             var setting = enabledSettings.FirstOrDefault(candidate =>
                 string.Equals(NormalizeRole(candidate.Role), role, StringComparison.OrdinalIgnoreCase));
             if (setting is null)
             {
-                this.pendingStaffRoleQueue.RemoveAt(0);
+                this.pendingStaffRoleQueue.RemoveAll(x => x.Equals(role, StringComparison.OrdinalIgnoreCase));
                 continue;
             }
 
             var currentSlots = this.GetCurrentSlotsForRole(nowUtc, role);
             if (currentSlots.Count == 0)
             {
-                this.pendingStaffRoleQueue.RemoveAt(0);
+                this.pendingStaffRoleQueue.RemoveAll(x => x.Equals(role, StringComparison.OrdinalIgnoreCase));
                 continue;
             }
 

@@ -16,7 +16,7 @@ namespace VenueHost.Services;
 /// </summary>
 public sealed class DjDatabaseStore : IDisposable
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
 
     private static readonly object BatteriesInitLock = new();
     private static bool batteriesInitialized;
@@ -44,7 +44,7 @@ public sealed class DjDatabaseStore : IDisposable
         using var connection = this.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT name, link
+            SELECT id, name, link
             FROM dj_database
             ORDER BY name COLLATE NOCASE;
             """;
@@ -55,8 +55,9 @@ public sealed class DjDatabaseStore : IDisposable
         {
             entries.Add(new DjDatabaseEntry
             {
-                Name = reader.GetString(0),
-                Link = reader.GetString(1),
+                Id = reader.GetString(0),
+                Name = reader.GetString(1),
+                Link = reader.GetString(2),
             });
         }
 
@@ -85,12 +86,14 @@ public sealed class DjDatabaseStore : IDisposable
             using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO dj_database (name, link, updated_at_utc)
-                VALUES ($name, $link, $updatedAtUtc)
+                INSERT INTO dj_database (id, name, link, updated_at_utc)
+                VALUES ($id, $name, $link, $updatedAtUtc)
                 ON CONFLICT(name) DO UPDATE SET
+                    id = excluded.id,
                     link = excluded.link,
                     updated_at_utc = excluded.updated_at_utc;
                 """;
+            insert.Parameters.AddWithValue("$id", entry.Id);
             insert.Parameters.AddWithValue("$name", entry.Name);
             insert.Parameters.AddWithValue("$link", entry.Link);
             insert.Parameters.AddWithValue("$updatedAtUtc", DateTime.UtcNow.ToString("O"));
@@ -139,6 +142,7 @@ public sealed class DjDatabaseStore : IDisposable
     private static DjDatabaseEntry Normalize(DjDatabaseEntry entry)
         => new()
         {
+            Id = string.IsNullOrWhiteSpace(entry.Id) ? Guid.NewGuid().ToString("N") : entry.Id,
             Name = entry.Name.Trim(),
             Link = entry.Link.Trim(),
         };
@@ -172,12 +176,50 @@ public sealed class DjDatabaseStore : IDisposable
                 );
 
                 CREATE TABLE IF NOT EXISTS dj_database (
+                    id TEXT NOT NULL DEFAULT '',
                     name TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
                     link TEXT NOT NULL DEFAULT '',
                     updated_at_utc TEXT NOT NULL
                 );
                 """;
             schema.ExecuteNonQuery();
+        }
+
+        // Existing v0.8.6 SQLite databases did not yet have persistent IDs.
+        using (var columns = connection.CreateCommand())
+        {
+            columns.Transaction = transaction;
+            columns.CommandText = "PRAGMA table_info(dj_database);";
+            using var reader = columns.ExecuteReader();
+            var hasId = false;
+            while (reader.Read())
+                if (string.Equals(reader.GetString(1), "id", StringComparison.OrdinalIgnoreCase)) hasId = true;
+            reader.Close();
+            if (!hasId)
+            {
+                using var alter = connection.CreateCommand();
+                alter.Transaction = transaction;
+                alter.CommandText = "ALTER TABLE dj_database ADD COLUMN id TEXT NOT NULL DEFAULT '';";
+                alter.ExecuteNonQuery();
+            }
+        }
+        using (var missing = connection.CreateCommand())
+        {
+            missing.Transaction = transaction;
+            missing.CommandText = "SELECT name FROM dj_database WHERE id = '';";
+            using var reader = missing.ExecuteReader();
+            var names = new List<string>();
+            while (reader.Read()) names.Add(reader.GetString(0));
+            reader.Close();
+            foreach (var name in names)
+            {
+                using var assign = connection.CreateCommand();
+                assign.Transaction = transaction;
+                assign.CommandText = "UPDATE dj_database SET id = $id WHERE name = $name;";
+                assign.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+                assign.Parameters.AddWithValue("$name", name);
+                assign.ExecuteNonQuery();
+            }
         }
 
         using (var version = connection.CreateCommand())

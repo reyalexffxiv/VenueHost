@@ -11,10 +11,10 @@ namespace VenueHost.Services;
 
 /// <summary>
 /// Executes native game chatbox commands.
-/// 
+///
 /// IChatGui.Print only writes local plugin/system messages.
 /// It does not send public chat messages.
-/// 
+///
 /// For commands like /s, /sh, /emote, etc., we use the game's
 /// RaptureShellModule command path through FFXIVClientStructs.
 /// Also spaces queued commands so FFXIV does not reject rapid macro lines.
@@ -25,6 +25,10 @@ public sealed class GameChatService
     private readonly Queue<QueuedChatCommand> pendingCommands = new();
 
     private DateTime nextCommandAllowedAt = DateTime.MinValue;
+    // True when the most recently observed Yell/Shout was a Yell.
+    // Null means no such chat activity has been observed in this session.
+    private bool? lastWasYell;
+
 
     public GameChatService(IPluginLog log)
     {
@@ -40,6 +44,65 @@ public sealed class GameChatService
     public int PendingCommandCount => this.pendingCommands.Count;
 
     public bool HasPendingCommands => this.pendingCommands.Count > 0;
+    public bool SmartChannelsEnabled { get; set; } = true;
+
+    /// <summary>Record only observed public Yell/Shout activity; no message content is retained.</summary>
+    public void ObserveChatChannel(Dalamud.Game.Text.XivChatType kind)
+    {
+        if (kind == Dalamud.Game.Text.XivChatType.Yell) this.lastWasYell = true;
+        else if (kind == Dalamud.Game.Text.XivChatType.Shout) this.lastWasYell = false;
+    }
+
+    /// <summary>Pause gate for automatic dispatch only. Explicit manual announcements remain allowed.</summary>
+    public bool DispatchPaused { get; private set; }
+
+    /// <summary>
+    /// Stops automatic dispatch and cancels pending automatic commands, including
+    /// remaining lines of automatic macros. Never discard a manually queued shout.
+    /// </summary>
+    public int PauseAndCancelPending()
+    {
+        this.DispatchPaused = true;
+        var removed = 0;
+        var pendingCount = this.pendingCommands.Count;
+        for (var i = 0; i < pendingCount; i++)
+        {
+            var queued = this.pendingCommands.Dequeue();
+            if (queued.IsManual)
+                this.pendingCommands.Enqueue(queued);
+            else
+                removed++;
+        }
+        this.LastStatus = $"Automation paused. Cancelled {removed} pending automatic commands.";
+        return removed;
+    }
+
+    /// <summary>Cancel only queued automatic lines for a disabled staff role.</summary>
+    public void CancelPendingAutomaticStaffRole(string role)
+    {
+        var count = this.pendingCommands.Count;
+        for (var i = 0; i < count; i++)
+        {
+            var command = this.pendingCommands.Dequeue();
+            if (command.IsManual || !string.Equals(command.StaffRole, role, StringComparison.OrdinalIgnoreCase))
+                this.pendingCommands.Enqueue(command);
+        }
+    }
+
+    /// <summary>Profile changes must never leak either manual or automatic messages between venues.</summary>
+    public void ClearAllForProfileSwitch()
+    {
+        this.pendingCommands.Clear();
+        this.nextCommandAllowedAt = DateTime.MinValue;
+        this.DispatchPaused = true;
+        this.LastStatus = "Venue changed. All pending chat commands cleared; automation paused.";
+    }
+
+    public void ResumeDispatch()
+    {
+        this.DispatchPaused = false;
+        this.LastStatus = "Native chat dispatcher resumed.";
+    }
 
     /// <summary>Last command that failed to execute, if any. Useful for manual copy/paste fallback.</summary>
     public string? LastFailedCommand { get; private set; }
@@ -106,12 +169,31 @@ public sealed class GameChatService
 
     /// <summary>
     /// Queues a user-editable macro.
-    /// Lines must be full chat commands such as /sh hello.
+    /// Each text line becomes a Yell/Shout. Explicit non-channel commands remain unchanged.
     /// The default delay is applied after every command line.
     /// Optional lines like &lt;wait.3&gt; still work and override the delay after the previous command.
     /// </summary>
-    public void QueueMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand)
+    public void QueueMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand, string? staffRole = null)
     {
+        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: false, staffRole: staffRole);
+    }
+
+    /// <summary>
+    /// Queue an explicit user-triggered macro. This works even while automatic
+    /// announcements are paused, and its queued lines survive PAUSE ALL.
+    /// </summary>
+    public void QueueManualMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand)
+    {
+        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: true);
+    }
+
+    private void QueueMacroCommandsCore(string macroText, TimeSpan defaultDelayAfterEachCommand, bool isManual, string? staffRole = null)
+    {
+        if (this.DispatchPaused && !isManual)
+        {
+            this.LastStatus = "Automation paused: automatic macro not queued.";
+            return;
+        }
         if (string.IsNullOrWhiteSpace(macroText))
         {
             this.LastStatus = "Not queued: macro was empty.";
@@ -146,17 +228,19 @@ public sealed class GameChatService
 
             if (pendingCommand is not null)
             {
-                this.QueueCommand(pendingCommand, pendingDelay);
+                this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole);
                 queuedCount++;
             }
 
-            pendingCommand = line;
+            // Legacy channel prefixes are recognized at dispatch without changing
+            // an open editor draft; plain announcement lines need no slash command.
+            pendingCommand = Configuration.NormalizeAnnouncementMacro(line);
             pendingDelay = defaultDelayAfterEachCommand;
         }
 
         if (pendingCommand is not null)
         {
-            this.QueueCommand(pendingCommand, pendingDelay);
+            this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole);
             queuedCount++;
         }
 
@@ -184,7 +268,8 @@ public sealed class GameChatService
     /// </summary>
     public void QueueSenderTestCommand()
     {
-        this.QueueCommand($"/e Venue Host chat sender test {DateTime.Now:HH:mm:ss}");
+        this.QueueCommand($"/e Venue Host chat sender test {DateTime.Now:HH:mm:ss}",
+            TimeSpan.Zero, isManual: true);
     }
 
     /// <summary>Clears the stored failed command after the user has copied or acknowledged it.</summary>
@@ -239,23 +324,30 @@ public sealed class GameChatService
 
     private void QueueCommand(string command, TimeSpan delayAfterCommand)
     {
+        this.QueueCommand(command, delayAfterCommand, isManual: false);
+    }
+
+    private void QueueCommand(string command, TimeSpan delayAfterCommand, bool isManual, string? staffRole = null)
+    {
         if (string.IsNullOrWhiteSpace(command))
         {
             this.LastStatus = "Not queued: command was empty.";
             return;
         }
 
-        var cleanCommand = CleanSingleLine(command);
-
-        if (!cleanCommand.StartsWith('/'))
+        if (this.DispatchPaused && !isManual)
         {
-            this.LastStatus = $"Not queued: command must start with '/'. Got: {cleanCommand}";
+            this.LastStatus = "Automation paused: automatic command not queued.";
             return;
         }
 
-        this.pendingCommands.Enqueue(new QueuedChatCommand(cleanCommand, delayAfterCommand));
+        var cleanCommand = CleanSingleLine(command);
+
+        // Plain lines are now intentional announcement content. Explicit commands
+        // retain their original slash prefix and are never changed to Yell/Shout.
+
+        this.pendingCommands.Enqueue(new QueuedChatCommand(cleanCommand, delayAfterCommand, isManual, staffRole));
         this.LastStatus = $"Queued command: {cleanCommand}";
-        this.log.Information("Queued native chatbox command: {Command}", cleanCommand);
     }
 
     /// <summary>
@@ -267,34 +359,51 @@ public sealed class GameChatService
         if (this.pendingCommands.Count == 0)
             return;
 
+        // PAUSE ALL blocks only automatic queue items. Manual macros are still
+        // executed one command at a time using the normal FFXIV pacing rules.
+        if (this.DispatchPaused && !this.pendingCommands.Peek().IsManual)
+            return;
+
         if (DateTime.Now < this.nextCommandAllowedAt)
             return;
 
-        var queuedCommand = this.pendingCommands.Dequeue();
-        var sent = this.TryExecuteCommandNow(queuedCommand.Command);
+        var queuedCommand = this.pendingCommands.Peek();
+        var outgoing = queuedCommand.Command;
+        if (!outgoing.StartsWith('/'))
+        {
+            // No timers: always use the opposite of the last observed Yell/Shout.
+            // A fresh plugin session begins with Yell. When disabled, always Yell.
+            var useShout = this.SmartChannelsEnabled && this.lastWasYell == true;
+            outgoing = (useShout ? "/sh " : "/y ") + outgoing;
+        }
+        this.pendingCommands.Dequeue();
+        var sent = this.TryExecuteCommandNow(outgoing);
 
         if (sent)
         {
             this.LastFailedCommand = null;
             this.LastFailureAt = null;
-            this.LastStatus = $"Sent command: {queuedCommand.Command}";
+            this.LastStatus = $"Sent command: {outgoing}";
+            // Record our own successful sends immediately; the chat event may arrive later.
+            if (outgoing.StartsWith("/y ", StringComparison.OrdinalIgnoreCase)) this.lastWasYell = true;
+            else if (outgoing.StartsWith("/sh ", StringComparison.OrdinalIgnoreCase)) this.lastWasYell = false;
             this.nextCommandAllowedAt = DateTime.Now.Add(queuedCommand.DelayAfterCommand);
         }
         else
         {
             var detail = this.LastStatus;
-            this.LastFailedCommand = queuedCommand.Command;
+            this.LastFailedCommand = outgoing;
             this.LastFailureAt = DateTime.Now;
             this.LastStatus = string.IsNullOrWhiteSpace(detail)
-                ? $"Failed to send command: {queuedCommand.Command}"
-                : $"Failed to send command: {queuedCommand.Command} ({detail})";
+                ? $"Failed to send command: {outgoing}"
+                : $"Failed to send command: {outgoing} ({detail})";
             this.nextCommandAllowedAt = DateTime.Now.AddSeconds(1);
         }
     }
 
     /// <summary>
     /// Executes a native game command immediately.
-    /// 
+    ///
     /// This method is unsafe because it calls game client structures directly.
     /// Keep calls funneled through the queue where possible.
     /// </summary>
@@ -344,13 +453,12 @@ public sealed class GameChatService
 
             shellModule->ExecuteCommandInner(&commandString, uiModule);
 
-            this.log.Information("Executed native chatbox command: {Command}", command);
             return true;
         }
         catch (Exception ex)
         {
             this.LastStatus = $"Failed: {ex.GetType().Name}: {ex.Message}";
-            this.log.Error(ex, "Failed to execute native chatbox command: {Command}", command);
+            this.log.Error(ex, "Failed to execute a native chatbox command.");
             return false;
         }
     }
@@ -383,5 +491,5 @@ public sealed class GameChatService
             .Trim();
     }
 
-    private sealed record QueuedChatCommand(string Command, TimeSpan DelayAfterCommand);
+    private sealed record QueuedChatCommand(string Command, TimeSpan DelayAfterCommand, bool IsManual, string? StaffRole);
 }

@@ -1,34 +1,19 @@
-# Venue Host
+# VenueHost 1.0b
 
-Venue Host is a lightweight Dalamud plugin to help with FFXIV venue hosting.
+A [Dalamud](https://github.com/goatcorp/Dalamud) plugin for hosting Final Fantasy XIV venue events
 
-## Current beta features
+## Install
 
-- DJ Lineup tab with server-time schedule rows
-- Event schedule window using ST / UTC dates and times
-- DJ Database window for reusable DJ names and stream links
-- CSV import/export for DJ Database backups and transfers
-- Current DJ, transition, and target tell buttons
-- Auto-shout scheduling based on FFXIV server time / UTC
-- Transition shout at DJ handoff boundaries
-- Staff Schedule tab with reusable staff rows and active-role windows
-- Staff Database window for reusable staff names and roles
-- Role-based staff shout macros with automatic queue spacing
-- Event Shouts tab for reusable venue-wide custom shout macros
-- Event Shout window plus per-shout time windows so timers stay inside planned times
-- FIFO queue spacing for simultaneous Event Shouts so announcements do not collide
-- Editable DJ and staff macro templates with wait settings
-- Contrast Mode for higher-contrast Venue Host windows
-- Commands: `/venuehost`, `/vhost`, and `/venuehost settings`
+Add this URL in Dalamud **Settings → Experimental → Custom Plugin Repositories**:
 
-## Guide
+```text
+https://raw.githubusercontent.com/reyalexffxiv/VenueHost/master/pluginmaster.json
+```
 
-- [DJ Lineup Guide](docs/VenueHost_DJ_Lineup_Guide.pdf)
+Save/refresh, then install **Venue Host** in the plugin installer.
 
-## Author
+Open with `/venuehost` or `/vhost`. Use `/venuehost settings` for Setup.
 
-ReyAlex
+## License
 
-## Version
-
-0.3.0.4 is the current beta release of Venue Host.
+AGPL-3.0-or-later — see [LICENSE.md](LICENSE.md). Attribution is in [NOTICE.md](NOTICE.md).

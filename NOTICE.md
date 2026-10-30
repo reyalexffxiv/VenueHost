@@ -1,4 +1,4 @@
-Venue Host is based structurally on the user's Venue Raffle project, which was based on the Dalamud SamplePlugin template by goatcorp.
+Venue Host is based based on the Dalamud SamplePlugin template by goatcorp.
 
 Dalamud and XIVLauncher are developed by goatcorp and contributors.
 Final Fantasy XIV is owned by Square Enix.

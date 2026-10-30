@@ -17,6 +17,9 @@ public sealed class DjDatabaseEntry
     [Newtonsoft.Json.JsonIgnore]
     public string RuntimeId { get; } = Guid.NewGuid().ToString("N");
 
+    /// <summary>Durable internal identity; display names remain the unique lookup key.</summary>
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
     public string Name { get; set; } = string.Empty;
 
     public string Link { get; set; } = string.Empty;

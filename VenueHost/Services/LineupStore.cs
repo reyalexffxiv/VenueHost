@@ -62,7 +62,7 @@ public sealed class LineupStore
     {
         public List<DjScheduleEntry> DjSchedule { get; set; } = [];
         public int SelectedDjOrder { get; set; }
-        public string VenueName { get; set; } = "Urban";
+        public string VenueName { get; set; } = "My Venue";
         public string EventName { get; set; } = string.Empty;
         public string EventStartDate { get; set; } = string.Empty;
         public string EventStartTime { get; set; } = string.Empty;

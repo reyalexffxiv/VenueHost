@@ -9,6 +9,9 @@ namespace VenueHost.Models;
 [Serializable]
 public sealed class DjScheduleEntry
 {
+    /// <summary>Optional link to the shared directory; legacy name-based rows remain supported.</summary>
+    public string DJId { get; set; } = string.Empty;
+
     public int Order { get; set; }
 
     public string DJName { get; set; } = string.Empty;

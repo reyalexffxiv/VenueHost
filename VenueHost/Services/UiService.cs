@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Numerics;
 using Dalamud.Interface.Textures;
 
 namespace VenueHost.Services;
@@ -21,6 +22,23 @@ public sealed class UiService : BaseService, IDisposable
     private Action? toggleConfigUi;
     private Action? toggleDjDatabaseUi;
     private Action? toggleStaffDatabaseUi;
+    private Vector2 mainWindowPosition;
+    private Vector2 mainWindowSize;
+
+    // The main window updates this each frame so independently drawn windows
+    // open over VenueHost rather than an ImGui default position.
+    public void UpdateMainWindowBounds(Vector2 position, Vector2 size)
+    {
+        this.mainWindowPosition = position;
+        this.mainWindowSize = size;
+    }
+
+    public bool TryGetMainWindowBounds(out Vector2 position, out Vector2 size)
+    {
+        position = this.mainWindowPosition;
+        size = this.mainWindowSize;
+        return size.X > 0f && size.Y > 0f;
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="UiService"/> class.

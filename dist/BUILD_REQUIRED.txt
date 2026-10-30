@@ -1,7 +1,0 @@
-VenueHost-latest.zip was intentionally not generated in the ChatGPT sandbox because .NET/Dalamud build tooling is not available here.
-
-Run from PowerShell in the repo root:
-
-powershell -ExecutionPolicy Bypass -File .\scripts\Build-DalamudPackage.ps1
-
-The script will build and recreate dist/VenueHost-latest.zip after validating versions and required package files.

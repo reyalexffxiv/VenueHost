@@ -18,41 +18,41 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 21;
+    public const int CurrentConfigVersion = 23;
 
     public const string DefaultCurrentDjMacro =
-        "/y ♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
+        "♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
         "{GiveawayLine}";
 
     public const string DefaultTransitionMacro =
-        "/y Thank you for an amazing set, {CurrentDJName}! ♪♪ Don't forget to tune in to our next awesome live DJ, {NextDJName}! ♪♪ {NextDJLink}";
+        "Thank you for an amazing set, {CurrentDJName}! ♪♪ Don't forget to tune in to our next awesome live DJ, {NextDJName}! ♪♪ {NextDJLink}";
 
     public const string DefaultTellCurrentDjMacro =
         "/tell <t> Our current DJ is {CurrentDJName} - {CurrentDJLink}";
 
     public const string DefaultPhotographerShoutMacro =
-        "/sh Are you looking for a Photographer?\n" +
-        "/sh Our current photographers are: {StaffNames}\n" +
-        "/sh Reach out to any of them with a Tell <3";
+        "Are you looking for a Photographer?\n" +
+        "Our current photographers are: {StaffNames}\n" +
+        "Reach out to any of them with a Tell <3";
 
     public const string DefaultBarShoutMacro =
-        "/sh Our Barkeepers are here to satisfy your thirst!\n" +
-        "/sh Our dear {StaffNames} {IsAre} at our bar to serve you.\n" +
-        "/sh Don't be shy, come say hello! <3";
+        "Our Barkeepers are here to satisfy your thirst!\n" +
+        "Our dear {StaffNames} {IsAre} at our bar to serve you.\n" +
+        "Don't be shy, come say hello! <3";
 
     public const string DefaultCourtesanShoutMacro =
-        "/sh Our Courtesans are here to indulge your every desire.\n" +
-        "/sh Our dear {StaffNames} {IsAre} waiting to spoil and pamper you.\n" +
-        "/sh Don't be shy, step closer and tell them your wishes! <3";
+        "Our Courtesans are here to indulge your every desire.\n" +
+        "Our dear {StaffNames} {IsAre} waiting to spoil and pamper you.\n" +
+        "Don't be shy, step closer and tell them your wishes! <3";
 
     public const string DefaultMaidShoutMacro =
-        "/sh Our Maids are here to provide you with flawless care and comfort.\n" +
-        "/sh Our dear {StaffNames} {IsAre} at your beck and call for the evening.\n" +
-        "/sh Don't be shy, step inside and allow them to serve you! <3\n" +
-        "/sh Let them brighten your day <3";
+        "Our Maids are here to provide you with flawless care and comfort.\n" +
+        "Our dear {StaffNames} {IsAre} at your beck and call for the evening.\n" +
+        "Don't be shy, step inside and allow them to serve you! <3\n" +
+        "Let them brighten your day <3";
 
     public const string DefaultEventShoutMacro =
-        "/sh Welcome to {VenueName}!";
+        "Welcome to {VenueName}!";
 
     public int Version { get; set; } = CurrentConfigVersion;
 
@@ -60,13 +60,7 @@ public sealed class Configuration : IPluginConfiguration
 
     public int SelectedDjOrder { get; set; } = 0;
 
-    public List<DjDatabaseEntry> DjDatabase { get; set; } =
-    [
-        new DjDatabaseEntry { Name = "Gaia", Link = "https://www.twitch.tv/dj_gaia" },
-        new DjDatabaseEntry { Name = "Khangomon", Link = "https://www.twitch.tv/khangomon" },
-        new DjDatabaseEntry { Name = "Raindrop Kitty", Link = "https://www.twitch.tv/raindropkitty" },
-        new DjDatabaseEntry { Name = "Rey Alex", Link = "https://www.twitch.tv/reyalexxx" },
-    ];
+    public List<DjDatabaseEntry> DjDatabase { get; set; } = [];
 
     public List<EventShoutEntry> EventShouts { get; set; } = [];
 
@@ -94,7 +88,7 @@ public sealed class Configuration : IPluginConfiguration
     public string NextDJName { get; set; } = string.Empty;
     public string NextDJLink { get; set; } = string.Empty;
 
-    public string VenueName { get; set; } = "Urban";
+    public string VenueName { get; set; } = "My Venue";
     public string EventName { get; set; } = string.Empty;
     public string EventStartDate { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public string EventStartTime { get; set; } = "18:00";
@@ -111,11 +105,11 @@ public sealed class Configuration : IPluginConfiguration
     public string EventShoutEndDate { get; set; } = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public string EventShoutEndTime { get; set; } = "02:00";
 
-    public string GiveawayText { get; set; } = "2M Gil Giveaway";
-    public string GiveawayCommand { get; set; } = "!urban";
+    public string GiveawayText { get; set; } = string.Empty;
+    public string GiveawayCommand { get; set; } = string.Empty;
 
-    public bool GiveawayEnabled { get; set; } = true;
-    public bool GiveawayCommandEnabled { get; set; } = true;
+    public bool GiveawayEnabled { get; set; } = false;
+    public bool GiveawayCommandEnabled { get; set; } = false;
 
     public string CurrentDjMacro { get; set; } = DefaultCurrentDjMacro;
     public float CurrentDjMacroDelaySeconds { get; set; } = 2f;
@@ -127,6 +121,11 @@ public sealed class Configuration : IPluginConfiguration
     public float TellCurrentDjMacroDelaySeconds { get; set; } = 2f;
 
     public bool AutoCurrentDjShoutEnabled { get; set; } = true;
+
+    // Master switches preserve individual staff-role and event-row selections.
+    // Defaults are true so existing configurations behave as before.
+    public bool StaffAutomationMasterEnabled { get; set; } = true;
+    public bool EventAutomationMasterEnabled { get; set; } = true;
     public int AutoCurrentDjShoutIntervalMinutes { get; set; } = 10;
 
     public string SelectedStaffRole { get; set; } = "Photographer";
@@ -137,6 +136,11 @@ public sealed class Configuration : IPluginConfiguration
     public float PhotographerShoutMacroDelaySeconds { get; set; } = 2f;
     public bool AutoPhotographerShoutEnabled { get; set; }
     public int AutoPhotographerShoutIntervalMinutes { get; set; } = 15;
+
+    // Venue-specific priority order. Only automatic announcements use this order.
+    public List<string> ShoutPriority { get; set; } = [];
+    // Reuse the existing staff stagger preference as one cross-category automatic stagger.
+    public bool SmartChatChannelsEnabled { get; set; } = true;
 
     public bool AutoStaffRoleShoutStaggerEnabled { get; set; } = true;
     public int AutoStaffRoleShoutStaggerMinutes { get; set; } = 3;
@@ -149,6 +153,13 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public bool ContrastModeEnabled { get; set; }
 
+    /// <summary>
+    /// User-wide, opt-in High Contrast display for all VenueHost pages and editors.
+    /// The existing persisted key is retained for backwards compatibility; it
+    /// is not part of a venue profile or exported event data.
+    /// </summary>
+    public bool OverviewHighContrastPreviewEnabled { get; set; }
+
     /// <summary>Shows a copy helper in Settings when native chat sending fails.</summary>
     public bool ShowChatSenderFallbackHelper { get; set; } = true;
 
@@ -160,6 +171,11 @@ public sealed class Configuration : IPluginConfiguration
 
     [NonSerialized]
     private LineupStore? lineupStore;
+
+    [NonSerialized]
+    private VenueProfileService? profileService;
+
+    public void BindProfiles(VenueProfileService service) => this.profileService = service;
 
     public void Initialize(IDalamudPluginInterface pluginInterface)
     {
@@ -176,6 +192,8 @@ public sealed class Configuration : IPluginConfiguration
         this.NormalizeDjDatabase(saveToStore: false);
         this.EnsureStaffRoleShoutSettings();
         this.ClampAutoShoutSettings();
+        this.NormalizeAnnouncementMacros();
+        this.EnsureShoutPriority();
     }
 
     private void MigrateConfig()
@@ -187,13 +205,9 @@ public sealed class Configuration : IPluginConfiguration
         this.StaffRoles ??= ["Photographer", "Bar", "Courtesan", "Maid"];
         this.StaffRoleShoutSettings ??= [];
         this.EventShouts ??= [];
+        this.ShoutPriority ??= [];
 
-        // Version 6 added the reusable DJ database and target tell macro.
-        if (this.Version < 6 && this.DjDatabase.Count == 0)
-        {
-            this.DjDatabase.Add(new DjDatabaseEntry { Name = "Rey Alex", Link = "https://www.twitch.tv/reyalexxx" });
-            this.DjDatabase.Add(new DjDatabaseEntry { Name = "Khangomon", Link = "https://www.twitch.tv/khangomon" });
-        }
+        // Version 6 introduced the reusable DJ database. Existing saved contacts are preserved.
 
         // Version 8 keeps the DJ Database unique by DJ name. This cleans up
         // duplicated beta data that may have been created while testing.
@@ -253,10 +267,9 @@ public sealed class Configuration : IPluginConfiguration
             this.StaffRoles.Add("Maid");
         }
 
-        // Pull existing beta roles into the central role list once, then keep
-        // Staff Database and Staff Schedule using this normalized list.
-        foreach (var role in (this.StaffDatabase ?? []).Select(entry => entry.Role)
-                     .Concat((this.StaffSchedule ?? []).Select(entry => entry.Role))
+        // Only venue shift assignments and macros define venue roles. The global
+        // Staff Database may contain default roles used at OTHER venues.
+        foreach (var role in (this.StaffSchedule ?? []).Select(entry => entry.Role)
                      .Concat((this.StaffRoleShoutSettings ?? []).Select(entry => entry.Role)))
         {
             this.AddStaffRole(role, save: false);
@@ -271,9 +284,6 @@ public sealed class Configuration : IPluginConfiguration
 
         if (!this.StaffRoles.Any(role => role.Equals("Photographer", StringComparison.OrdinalIgnoreCase)))
             this.StaffRoles.Insert(0, "Photographer");
-
-        foreach (var entry in this.StaffDatabase ?? [])
-            entry.Role = this.GetExistingOrDefaultStaffRole(entry.Role);
 
         foreach (var entry in this.StaffSchedule ?? [])
             entry.Role = this.GetExistingOrDefaultStaffRole(entry.Role);
@@ -317,12 +327,6 @@ public sealed class Configuration : IPluginConfiguration
                 this.StaffRoles[i] = newRole;
         }
 
-        foreach (var entry in this.StaffDatabase ?? [])
-        {
-            if (entry.Role.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
-                entry.Role = newRole;
-        }
-
         foreach (var entry in this.StaffSchedule ?? [])
         {
             if (entry.Role.Equals(oldRole, StringComparison.OrdinalIgnoreCase))
@@ -340,6 +344,9 @@ public sealed class Configuration : IPluginConfiguration
 
         this.EnsureStaffRoles();
         this.EnsureStaffRoleShoutSettings();
+        this.ShoutPriority = (this.ShoutPriority ?? []).Select(key =>
+            key.Equals($"staff:{oldRole}", StringComparison.OrdinalIgnoreCase) ? $"staff:{newRole}" : key).ToList();
+        this.EnsureShoutPriority();
         this.Save();
         return true;
     }
@@ -355,12 +362,6 @@ public sealed class Configuration : IPluginConfiguration
             return false;
 
         var fallback = this.StaffRoles.FirstOrDefault() ?? "Photographer";
-        foreach (var entry in this.StaffDatabase ?? [])
-        {
-            if (entry.Role.Equals(role, StringComparison.OrdinalIgnoreCase))
-                entry.Role = fallback;
-        }
-
         foreach (var entry in this.StaffSchedule ?? [])
         {
             if (entry.Role.Equals(role, StringComparison.OrdinalIgnoreCase))
@@ -490,20 +491,11 @@ public sealed class Configuration : IPluginConfiguration
         this.StaffEndTime = NormalizeTimeText(this.StaffEndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "02:00" : this.EventEndTime);
     }
 
+    // Compatibility API for existing callers: staff shifts now use the event window
+    // exclusively. The old StaffStart*/StaffEnd* properties are retained for safe
+    // deserialization of previous settings, but are no longer scheduling inputs.
     public bool TryGetStaffWindow(out DateTime startUtc, out DateTime endUtc)
-    {
-        this.EnsureStaffWindowDefaults();
-        startUtc = default;
-        endUtc = default;
-
-        if (!DateTime.TryParseExact($"{this.StaffStartDate} {this.StaffStartTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out startUtc))
-            return false;
-
-        if (!DateTime.TryParseExact($"{this.StaffEndDate} {this.StaffEndTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out endUtc))
-            return false;
-
-        return endUtc > startUtc;
-    }
+        => this.TryGetEventWindow(out startUtc, out endUtc);
 
 
     public void EnsureEventShoutWindowDefaults()
@@ -514,18 +506,26 @@ public sealed class Configuration : IPluginConfiguration
         this.EventShoutEndTime = NormalizeTimeText(this.EventShoutEndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "02:00" : this.EventEndTime);
     }
 
+    /// <summary>
+    /// Custom shouts follow the event dates rather than an independently
+    /// configured (and now hidden) event-shout window. Same-day pre-party
+    /// announcements are allowed, with up to six hours the previous evening
+    /// if an event starts after midnight. Individual shout HH:mm windows still
+    /// limit sends, and nothing can auto-send after event end.
+    /// </summary>
     public bool TryGetEventShoutWindow(out DateTime startUtc, out DateTime endUtc)
     {
-        this.EnsureEventShoutWindowDefaults();
         startUtc = default;
         endUtc = default;
-
-        if (!DateTime.TryParseExact($"{this.EventShoutStartDate} {this.EventShoutStartTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out startUtc))
+        if (!this.TryGetEventWindow(out var eventStartUtc, out var eventEndUtc))
             return false;
 
-        if (!DateTime.TryParseExact($"{this.EventShoutEndDate} {this.EventShoutEndTime}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out endUtc))
-            return false;
-
+        // Usually start at midnight on event day, so a pre-party shout can
+        // run at any earlier time that same day. For events starting shortly
+        // after midnight, allow the prior evening's six-hour lead-in too.
+        var preEventLeadIn = eventStartUtc.AddHours(-6);
+        startUtc = preEventLeadIn < eventStartUtc.Date ? preEventLeadIn : eventStartUtc.Date;
+        endUtc = eventEndUtc;
         return endUtc > startUtc;
     }
 
@@ -730,6 +730,16 @@ public sealed class Configuration : IPluginConfiguration
         return this.GetTimelineSlotAt(utcNow)?.Entry;
     }
 
+    public DjScheduleEntry? GetNextServerTimeDj(DateTime utcNow)
+    {
+        this.EnsureScheduleDefaults();
+        return this.BuildEventTimeline()
+            .Where(slot => slot.IsInsideEventWindow && slot.StartUtc > utcNow && HasUsableDj(slot.Entry))
+            .OrderBy(slot => slot.StartUtc)
+            .Select(slot => slot.Entry)
+            .FirstOrDefault();
+    }
+
 
     /// <summary>
     /// A usable DJ row has a real name. Placeholder rows such as "Pick DJ..."
@@ -747,28 +757,17 @@ public sealed class Configuration : IPluginConfiguration
                TimeSpan.TryParseExact(value, @"hh\:mm", null, out time);
     }
 
-    private static bool IsWithinScheduleWindow(TimeSpan now, TimeSpan start, TimeSpan end)
-    {
-        if (start == end)
-            return false;
-
-        return end > start
-            ? now >= start && now < end
-            : now >= start || now < end;
-    }
-
-
-
     public void EnsureEventShoutDefaults()
     {
         this.EventShouts ??= [];
 
         foreach (var entry in this.EventShouts)
         {
+            if (string.IsNullOrWhiteSpace(entry.Id)) entry.Id = Guid.NewGuid().ToString("N");
             entry.Name = string.IsNullOrWhiteSpace(entry.Name) ? "New Shout" : entry.Name.Trim();
             entry.Macro = string.IsNullOrWhiteSpace(entry.Macro) ? DefaultEventShoutMacro : entry.Macro;
-            entry.StartTime = NormalizeTimeText(entry.StartTime, string.IsNullOrWhiteSpace(this.EventShoutStartTime) ? "18:00" : this.EventShoutStartTime);
-            entry.EndTime = NormalizeTimeText(entry.EndTime, string.IsNullOrWhiteSpace(this.EventShoutEndTime) ? "23:00" : this.EventShoutEndTime);
+            entry.StartTime = NormalizeTimeText(entry.StartTime, string.IsNullOrWhiteSpace(this.EventStartTime) ? "18:00" : this.EventStartTime);
+            entry.EndTime = NormalizeTimeText(entry.EndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "23:00" : this.EventEndTime);
             entry.DelaySeconds = Math.Clamp(entry.DelaySeconds, 0f, 10f);
             entry.IntervalMinutes = Math.Clamp(entry.IntervalMinutes, 1, 240);
         }
@@ -783,6 +782,60 @@ public sealed class Configuration : IPluginConfiguration
 
         if (this.SelectedEventShoutOrder <= 0 || this.EventShouts.All(entry => entry.Order != this.SelectedEventShoutOrder))
             this.SelectedEventShoutOrder = this.EventShouts[0].Order;
+    }
+
+    /// <summary>Keep a venue-specific ordering of existing DJ, role and event announcements.</summary>
+    public IReadOnlyList<(string Key, string Label)> GetPriorityOptions()
+    {
+        var options = new List<(string, string)>
+        {
+            ("dj:handoff", "DJ Handoff"),
+            ("dj:current", "DJ Announcement"),
+        };
+        options.AddRange((this.StaffRoles ?? []).Select(role => ($"staff:{role}", $"Staff - {role}")));
+        options.AddRange((this.EventShouts ?? []).Select(entry => ($"event:{entry.Id}", $"Event - {entry.Name}")));
+        return options;
+    }
+
+    public void EnsureShoutPriority()
+    {
+        this.ShoutPriority ??= [];
+        var options = this.GetPriorityOptions();
+        var existing = options.Select(option => option.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        this.ShoutPriority = this.ShoutPriority.Where(existing.Contains)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var option in options)
+            if (!this.ShoutPriority.Contains(option.Key, StringComparer.OrdinalIgnoreCase))
+                this.ShoutPriority.Add(option.Key);
+    }
+
+    public int PriorityOf(string key)
+    {
+        var index = this.ShoutPriority?.FindIndex(item => string.Equals(item, key, StringComparison.OrdinalIgnoreCase)) ?? -1;
+        return index < 0 ? int.MaxValue : index;
+    }
+
+    // Safe to repeat. Only recognized Yell/Shout prefixes on announcement lines are removed.
+    // Explicit /tell, /em and other commands retain their semantics.
+    public static string NormalizeAnnouncementMacro(string? macro)
+    {
+        if (string.IsNullOrEmpty(macro)) return macro ?? string.Empty;
+        return string.Join("\n", macro.Replace("\r", string.Empty).Split('\n')
+            .Select(line => Regex.Replace(line, @"^\s*/(?:y|yell|sh|shout)(?=\s|$)\s*", "", RegexOptions.IgnoreCase)));
+    }
+
+    public void NormalizeAnnouncementMacros()
+    {
+        this.CurrentDjMacro = NormalizeAnnouncementMacro(this.CurrentDjMacro);
+        this.TransitionMacro = NormalizeAnnouncementMacro(this.TransitionMacro);
+        this.PhotographerShoutMacro = NormalizeAnnouncementMacro(this.PhotographerShoutMacro);
+        this.BarShoutMacro = NormalizeAnnouncementMacro(this.BarShoutMacro);
+        this.CourtesanShoutMacro = NormalizeAnnouncementMacro(this.CourtesanShoutMacro);
+        this.MaidShoutMacro = NormalizeAnnouncementMacro(this.MaidShoutMacro);
+        foreach (var role in this.StaffRoleShoutSettings ?? [])
+            role.Macro = NormalizeAnnouncementMacro(role.Macro);
+        foreach (var entry in this.EventShouts ?? [])
+            entry.Macro = NormalizeAnnouncementMacro(entry.Macro);
     }
 
     public void NormalizeEventShoutOrders()
@@ -826,10 +879,22 @@ public sealed class Configuration : IPluginConfiguration
         variables["EventShoutName"] = entry?.Name ?? string.Empty;
         variables["CurrentTime"] = now.ToString("HH:mm", CultureInfo.InvariantCulture);
         variables["ServerTime"] = now.ToString("HH:mm", CultureInfo.InvariantCulture);
-        variables["EventShoutStartDate"] = this.EventShoutStartDate;
-        variables["EventShoutStartTime"] = this.EventShoutStartTime;
-        variables["EventShoutEndDate"] = this.EventShoutEndDate;
-        variables["EventShoutEndTime"] = this.EventShoutEndTime;
+        // Preserve legacy macro variable names, but populate them from the
+        // active event-derived shout window rather than obsolete saved dates.
+        if (this.TryGetEventShoutWindow(out var shoutStart, out var shoutEnd))
+        {
+            variables["EventShoutStartDate"] = shoutStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            variables["EventShoutStartTime"] = shoutStart.ToString("HH:mm", CultureInfo.InvariantCulture);
+            variables["EventShoutEndDate"] = shoutEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            variables["EventShoutEndTime"] = shoutEnd.ToString("HH:mm", CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            variables["EventShoutStartDate"] = this.EventStartDate;
+            variables["EventShoutStartTime"] = this.EventStartTime;
+            variables["EventShoutEndDate"] = this.EventEndDate;
+            variables["EventShoutEndTime"] = this.EventEndTime;
+        }
         variables["ShoutStartTime"] = entry?.StartTime ?? string.Empty;
         variables["ShoutEndTime"] = entry?.EndTime ?? string.Empty;
         variables["EventShoutRowStartTime"] = entry?.StartTime ?? string.Empty;
@@ -1197,8 +1262,13 @@ public sealed class Configuration : IPluginConfiguration
 
     public Dictionary<string, string> BuildVariables(DjScheduleEntry? currentDjOverride = null, DjScheduleEntry? nextDjOverride = null)
     {
-        var currentDj = currentDjOverride ?? this.GetSelectedDj();
-        var nextDj = nextDjOverride ?? this.GetNextDjAfter(currentDj);
+        // Unspecified DJ variables describe the live schedule, never the editing selection.
+        // Explicit DJ overrides (used by automatic shouts) keep their existing semantics.
+        var nowUtc = DateTime.UtcNow;
+        var currentDj = currentDjOverride ?? this.GetCurrentServerTimeDj(nowUtc);
+        var nextDj = nextDjOverride ?? (currentDjOverride is not null
+            ? this.GetNextDjAfter(currentDj)
+            : this.GetNextServerTimeDj(nowUtc));
 
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1232,7 +1302,7 @@ public sealed class Configuration : IPluginConfiguration
         if (!this.IsGiveawayActiveFor(currentDj) || string.IsNullOrWhiteSpace(this.GiveawayText))
             return string.Empty;
 
-        var line = $"/y To enter twitch {this.GiveawayText}";
+        var line = $"To enter twitch {this.GiveawayText}";
         var commandLine = this.BuildGiveawayCommandLine(currentDj);
         return string.IsNullOrWhiteSpace(commandLine) ? line : $"{line} {commandLine}";
     }
@@ -1419,6 +1489,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public void Save()
     {
+        // Global people and venue settings are persisted separately.
+        // The profile index + snapshots remain the recovery authority for venues.
+        this.profileService?.CaptureActive();
         this.pluginInterface?.SavePluginConfig(this);
         this.lineupStore?.Save(this);
     }

@@ -22,7 +22,7 @@ public sealed class UiTheme : IDisposable
         this.pushedStyleVars = pushedStyleVars;
     }
 
-    public static UiTheme PushContrastIfEnabled(bool enabled)
+    public static UiTheme PushContrastIfEnabled(bool enabled, bool preserveLayout = false)
     {
         if (!enabled)
             return new UiTheme(0);
@@ -39,15 +39,14 @@ public sealed class UiTheme : IDisposable
         var neonCyan = new Vector4(0.00f, 1.00f, 0.95f, 1.00f);
         var neonMagenta = new Vector4(1.00f, 0.05f, 0.85f, 1.00f);
         var neonGreen = new Vector4(0.10f, 1.00f, 0.25f, 1.00f);
-        var neonMint = new Vector4(0.58f, 1.00f, 0.88f, 1.00f);
         var dimGold = new Vector4(0.68f, 0.62f, 0.00f, 0.70f);
         var black = new Vector4(0.00f, 0.00f, 0.00f, 1.00f);
 
-        ImGui.SetWindowFontScale(1.15f);
+        if (!preserveLayout) ImGui.SetWindowFontScale(1.15f);
 
-        // Default text uses mint/cyan instead of yellow so long help blocks do not
-        // become a wall of yellow. Yellow is reserved for structure, checks, and key accents.
-        Push(ImGuiCol.Text, neonMint);
+        // White is the default content color, matching the accessible Overview.
+        // Color accents remain reserved for titles, statuses and interactive controls.
+        Push(ImGuiCol.Text, new Vector4(1f, 1f, 1f, 1f));
         Push(ImGuiCol.TextDisabled, new Vector4(0.36f, 0.70f, 0.64f, 1.00f));
         Push(ImGuiCol.WindowBg, new Vector4(0.00f, 0.00f, 0.00f, 0.985f));
         Push(ImGuiCol.ChildBg, new Vector4(0.00f, 0.00f, 0.00f, 0.96f));
@@ -105,10 +104,13 @@ public sealed class UiTheme : IDisposable
         pushedStyleVars++;
         ImGui.PushStyleVar(ImGuiStyleVar.PopupBorderSize, 3.0f);
         pushedStyleVars++;
-        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 6f));
-        pushedStyleVars++;
-        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 6f));
-        pushedStyleVars++;
+        if (!preserveLayout)
+        {
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 6f));
+            pushedStyleVars++;
+            ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(8f, 6f));
+            pushedStyleVars++;
+        }
 
         return new UiTheme(count, pushedStyleVars);
 
