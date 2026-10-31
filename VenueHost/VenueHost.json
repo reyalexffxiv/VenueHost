@@ -14,5 +14,6 @@
     "events"
   ],
   "DalamudApiLevel": 15,
+  "IconUrl": "https://raw.githubusercontent.com/reyalexffxiv/ReyPlugins/main/cutepeeposit.png",
   "RepoUrl": "https://github.com/reyalexffxiv/VenueHost"
 }
