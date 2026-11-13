@@ -6,6 +6,7 @@ using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Shell;
 using Dalamud.Plugin.Services;
+using VenueHost.Models;
 
 namespace VenueHost.Services;
 
@@ -28,6 +29,9 @@ public sealed class GameChatService
     // True when the most recently observed Yell/Shout was a Yell.
     // Null means no such chat activity has been observed in this session.
     private bool? lastWasYell;
+    private long nextMacroId;
+    private long? activeMacroId;
+    private AnnouncementChannel activeMacroChannel = AnnouncementChannel.Yell;
 
 
     public GameChatService(IPluginLog log)
@@ -94,6 +98,7 @@ public sealed class GameChatService
     {
         this.pendingCommands.Clear();
         this.nextCommandAllowedAt = DateTime.MinValue;
+        this.activeMacroId = null;
         this.DispatchPaused = true;
         this.LastStatus = "Venue changed. All pending chat commands cleared; automation paused.";
     }
@@ -173,21 +178,26 @@ public sealed class GameChatService
     /// The default delay is applied after every command line.
     /// Optional lines like &lt;wait.3&gt; still work and override the delay after the previous command.
     /// </summary>
-    public void QueueMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand, string? staffRole = null)
+    public void QueueMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand,
+        string? staffRole = null, AnnouncementChannel manualChannel = AnnouncementChannel.Yell)
     {
-        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: false, staffRole: staffRole);
+        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: false,
+            staffRole: staffRole, manualChannel: manualChannel);
     }
 
     /// <summary>
     /// Queue an explicit user-triggered macro. This works even while automatic
     /// announcements are paused, and its queued lines survive PAUSE ALL.
     /// </summary>
-    public void QueueManualMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand)
+    public void QueueManualMacroCommands(string macroText, TimeSpan defaultDelayAfterEachCommand,
+        AnnouncementChannel manualChannel = AnnouncementChannel.Yell)
     {
-        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: true);
+        this.QueueMacroCommandsCore(macroText, defaultDelayAfterEachCommand, isManual: true,
+            manualChannel: manualChannel);
     }
 
-    private void QueueMacroCommandsCore(string macroText, TimeSpan defaultDelayAfterEachCommand, bool isManual, string? staffRole = null)
+    private void QueueMacroCommandsCore(string macroText, TimeSpan defaultDelayAfterEachCommand, bool isManual,
+        string? staffRole = null, AnnouncementChannel manualChannel = AnnouncementChannel.Yell)
     {
         if (this.DispatchPaused && !isManual)
         {
@@ -209,6 +219,10 @@ public sealed class GameChatService
         string? pendingCommand = null;
         var pendingDelay = defaultDelayAfterEachCommand;
         var queuedCount = 0;
+        // One unique container for all lines in this call, even if other chat arrives
+        // while its delayed lines are being dispatched.
+        var macroId = ++this.nextMacroId;
+        manualChannel = Configuration.NormalizeAnnouncementChannel(manualChannel);
 
         foreach (var rawLine in macroText.Replace("\r", string.Empty).Split('\n'))
         {
@@ -228,7 +242,7 @@ public sealed class GameChatService
 
             if (pendingCommand is not null)
             {
-                this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole);
+                this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole, macroId, manualChannel);
                 queuedCount++;
             }
 
@@ -240,7 +254,7 @@ public sealed class GameChatService
 
         if (pendingCommand is not null)
         {
-            this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole);
+            this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole, macroId, manualChannel);
             queuedCount++;
         }
 
@@ -327,7 +341,8 @@ public sealed class GameChatService
         this.QueueCommand(command, delayAfterCommand, isManual: false);
     }
 
-    private void QueueCommand(string command, TimeSpan delayAfterCommand, bool isManual, string? staffRole = null)
+    private void QueueCommand(string command, TimeSpan delayAfterCommand, bool isManual,
+        string? staffRole = null, long? macroId = null, AnnouncementChannel manualChannel = AnnouncementChannel.Yell)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -346,7 +361,8 @@ public sealed class GameChatService
         // Plain lines are now intentional announcement content. Explicit commands
         // retain their original slash prefix and are never changed to Yell/Shout.
 
-        this.pendingCommands.Enqueue(new QueuedChatCommand(cleanCommand, delayAfterCommand, isManual, staffRole));
+        this.pendingCommands.Enqueue(new QueuedChatCommand(cleanCommand, delayAfterCommand,
+            isManual, staffRole, macroId, manualChannel));
         this.LastStatus = $"Queued command: {cleanCommand}";
     }
 
@@ -371,10 +387,28 @@ public sealed class GameChatService
         var outgoing = queuedCommand.Command;
         if (!outgoing.StartsWith('/'))
         {
-            // No timers: always use the opposite of the last observed Yell/Shout.
-            // A fresh plugin session begins with Yell. When disabled, always Yell.
-            var useShout = this.SmartChannelsEnabled && this.lastWasYell == true;
-            outgoing = (useShout ? "/sh " : "/y ") + outgoing;
+            AnnouncementChannel channel;
+            if (queuedCommand.MacroId is long macroId)
+            {
+                // Lock the selected channel for the entire macro container.
+                // Later chat observations must not switch its remaining lines.
+                if (this.activeMacroId != macroId)
+                {
+                    this.activeMacroId = macroId;
+                    this.activeMacroChannel = this.SmartChannelsEnabled
+                        ? (this.lastWasYell == true ? AnnouncementChannel.Shout : AnnouncementChannel.Yell)
+                        : queuedCommand.ManualChannel;
+                }
+                channel = this.activeMacroChannel;
+            }
+            else
+            {
+                this.activeMacroId = null;
+                channel = this.SmartChannelsEnabled
+                    ? (this.lastWasYell == true ? AnnouncementChannel.Shout : AnnouncementChannel.Yell)
+                    : queuedCommand.ManualChannel;
+            }
+            outgoing = (channel == AnnouncementChannel.Shout ? "/sh " : "/y ") + outgoing;
         }
         this.pendingCommands.Dequeue();
         var sent = this.TryExecuteCommandNow(outgoing);
@@ -491,5 +525,6 @@ public sealed class GameChatService
             .Trim();
     }
 
-    private sealed record QueuedChatCommand(string Command, TimeSpan DelayAfterCommand, bool IsManual, string? StaffRole);
+    private sealed record QueuedChatCommand(string Command, TimeSpan DelayAfterCommand,
+        bool IsManual, string? StaffRole, long? MacroId, AnnouncementChannel ManualChannel);
 }

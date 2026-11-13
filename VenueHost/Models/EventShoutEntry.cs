@@ -17,6 +17,8 @@ public sealed class EventShoutEntry
 
     public string Macro { get; set; } = "Welcome to {VenueName}!";
 
+    public AnnouncementChannel Channel { get; set; } = AnnouncementChannel.Yell;
+
     /// <summary>
     /// Start time for this shout inside the event-derived shout window, in ST/UTC HH:mm.
     /// </summary>

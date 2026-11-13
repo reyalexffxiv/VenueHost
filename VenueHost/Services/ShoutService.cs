@@ -40,7 +40,8 @@ public sealed class ShoutService : BaseService
             this.Configuration.CurrentDjMacro,
             this.Configuration.BuildVariables(currentDj));
 
-        this.QueueShoutMacro(expandedMacro, this.Configuration.CurrentDjMacroDelaySeconds, isManual);
+        this.QueueShoutMacro(expandedMacro, this.Configuration.CurrentDjMacroDelaySeconds, isManual,
+            this.Configuration.CurrentDjChannel);
     }
 
     /// <summary>Queues the handoff from the live DJ to the next scheduled DJ.</summary>
@@ -62,7 +63,8 @@ public sealed class ShoutService : BaseService
             this.Configuration.TransitionMacro,
             this.Configuration.BuildVariables(endingDj, incomingDj));
 
-        this.QueueShoutMacro(expandedMacro, this.Configuration.TransitionMacroDelaySeconds, isManual);
+        this.QueueShoutMacro(expandedMacro, this.Configuration.TransitionMacroDelaySeconds, isManual,
+            this.Configuration.TransitionChannel);
     }
 
     /// <summary>Queues the configured tell macro for the live DJ.</summary>
@@ -76,7 +78,8 @@ public sealed class ShoutService : BaseService
             this.Configuration.TellCurrentDjMacro,
             this.Configuration.BuildVariables(currentDj));
 
-        this.QueueShoutMacro(expandedMacro, this.Configuration.TellCurrentDjMacroDelaySeconds, isManual: true);
+        this.QueueShoutMacro(expandedMacro, this.Configuration.TellCurrentDjMacroDelaySeconds, isManual: true,
+            manualChannel: AnnouncementChannel.Yell); // /tell remains an explicit command.
     }
 
     /// <summary>Queues the role macro for the currently selected staff role.</summary>
@@ -98,7 +101,7 @@ public sealed class ShoutService : BaseService
             this.Configuration.BuildStaffRoleVariables(role, nowUtc));
 
         this.QueueShoutMacro(expandedMacro, this.Configuration.GetStaffShoutDelaySeconds(role), isManual,
-            isManual ? null : role);
+            this.Configuration.GetStaffShoutChannel(role), isManual ? null : role);
     }
 
     public string PreviewCurrentDjShout()
@@ -120,13 +123,14 @@ public sealed class ShoutService : BaseService
     }
 
     /// <summary>Keep manual and automatic macros on explicit dispatch paths.</summary>
-    private void QueueShoutMacro(string macro, float delaySeconds, bool isManual, string? staffRole = null)
+    private void QueueShoutMacro(string macro, float delaySeconds, bool isManual,
+        AnnouncementChannel manualChannel, string? staffRole = null)
     {
         var delay = TimeSpan.FromSeconds(delaySeconds);
         if (isManual)
-            this.Chat.QueueManualMacroCommands(macro, delay);
+            this.Chat.QueueManualMacroCommands(macro, delay, manualChannel);
         else
-            this.Chat.QueueMacroCommands(macro, delay, staffRole);
+            this.Chat.QueueMacroCommands(macro, delay, staffRole, manualChannel);
     }
 
     private static bool HasUsableDj(DjScheduleEntry? entry)

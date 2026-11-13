@@ -202,6 +202,8 @@ public sealed class VenueProfileService
         {
             this.config.ShoutPriority = [];
             this.config.SmartChatChannelsEnabled = true;
+            this.config.CurrentDjChannel = AnnouncementChannel.Yell;
+            this.config.TransitionChannel = AnnouncementChannel.Yell;
             ApplyProperties(this.config, values);
             // The DJ SQLite store and the shared staff directory are global.
             // Switching venues must never replace or rewrite them.
@@ -210,6 +212,7 @@ public sealed class VenueProfileService
             this.config.EnsureStaffRoleShoutSettings();
             this.config.EnsureEventShoutDefaults();
             this.config.NormalizeAnnouncementMacros();
+            this.config.NormalizeAnnouncementChannels();
             this.config.EnsureShoutPriority();
             this.config.ClampAutoShoutSettings();
             this.activeId = targetId;
@@ -265,12 +268,15 @@ public sealed class VenueProfileService
             {
                 this.config.ShoutPriority = [];
                 this.config.SmartChatChannelsEnabled = true;
+                this.config.CurrentDjChannel = AnnouncementChannel.Yell;
+                this.config.TransitionChannel = AnnouncementChannel.Yell;
                 ApplyProperties(this.config, saved);
                 this.RepairActiveScheduleReferences();
                 this.config.EnsureStaffRoles();
                 this.config.EnsureStaffRoleShoutSettings();
                 this.config.EnsureEventShoutDefaults();
                 this.config.NormalizeAnnouncementMacros();
+                this.config.NormalizeAnnouncementChannels();
                 this.config.ShoutPriority ??= [];
                 this.config.EnsureShoutPriority();
                 this.config.ClampAutoShoutSettings();

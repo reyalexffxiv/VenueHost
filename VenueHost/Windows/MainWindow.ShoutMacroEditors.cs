@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using VenueHost.Models;
 
 namespace VenueHost.Windows;
 
@@ -15,8 +16,10 @@ public sealed partial class MainWindow
     private int djMacroSelected;
     private readonly string[] djMacroDrafts = new string[3];
     private readonly float[] djMacroDelayDrafts = new float[3];
+    private readonly AnnouncementChannel[] djMacroChannelDrafts = new AnnouncementChannel[2];
     private string staffMacroDraft = string.Empty;
     private float staffMacroDelayDraft;
+    private AnnouncementChannel staffMacroChannelDraft;
     private string staffMacroRole = string.Empty;
     private bool announcementMacroDiscardRequested;
     private bool announcementMacroFocusRequested;
@@ -44,6 +47,8 @@ public sealed partial class MainWindow
         this.djMacroDelayDrafts[0] = config.CurrentDjMacroDelaySeconds;
         this.djMacroDelayDrafts[1] = config.TransitionMacroDelaySeconds;
         this.djMacroDelayDrafts[2] = config.TellCurrentDjMacroDelaySeconds;
+        this.djMacroChannelDrafts[0] = config.CurrentDjChannel;
+        this.djMacroChannelDrafts[1] = config.TransitionChannel;
         this.djMacroSelected = 0;
         this.announcementMacroKind = AnnouncementMacroKind.Dj;
         this.announcementMacroFocusRequested = true;
@@ -71,6 +76,7 @@ public sealed partial class MainWindow
         this.staffMacroRole = config.SelectedStaffRole;
         this.staffMacroDraft = config.GetStaffShoutMacro(this.staffMacroRole);
         this.staffMacroDelayDraft = config.GetStaffShoutDelaySeconds(this.staffMacroRole);
+        this.staffMacroChannelDraft = config.GetStaffShoutChannel(this.staffMacroRole);
         this.announcementMacroKind = AnnouncementMacroKind.Staff;
         this.announcementMacroFocusRequested = true;
         this.announcementMacroDiscardRequested = false;
@@ -84,11 +90,14 @@ public sealed partial class MainWindow
                    !string.Equals(this.djMacroDrafts[2], config.TellCurrentDjMacro, StringComparison.Ordinal) ||
                    Math.Abs(this.djMacroDelayDrafts[0] - config.CurrentDjMacroDelaySeconds) > 0.001f ||
                    Math.Abs(this.djMacroDelayDrafts[1] - config.TransitionMacroDelaySeconds) > 0.001f ||
-                   Math.Abs(this.djMacroDelayDrafts[2] - config.TellCurrentDjMacroDelaySeconds) > 0.001f;
+                   Math.Abs(this.djMacroDelayDrafts[2] - config.TellCurrentDjMacroDelaySeconds) > 0.001f ||
+                   this.djMacroChannelDrafts[0] != config.CurrentDjChannel ||
+                   this.djMacroChannelDrafts[1] != config.TransitionChannel;
         if (this.announcementMacroKind == AnnouncementMacroKind.Staff)
         {
             return !string.Equals(this.staffMacroDraft, config.GetStaffShoutMacro(this.staffMacroRole), StringComparison.Ordinal) ||
-                   Math.Abs(this.staffMacroDelayDraft - config.GetStaffShoutDelaySeconds(this.staffMacroRole)) > 0.001f;
+                   Math.Abs(this.staffMacroDelayDraft - config.GetStaffShoutDelaySeconds(this.staffMacroRole)) > 0.001f ||
+                   this.staffMacroChannelDraft != config.GetStaffShoutChannel(this.staffMacroRole);
         }
         return false;
     }
@@ -108,6 +117,8 @@ public sealed partial class MainWindow
             config.CurrentDjMacro = Configuration.NormalizeAnnouncementMacro(this.djMacroDrafts[0]);
             config.TransitionMacro = Configuration.NormalizeAnnouncementMacro(this.djMacroDrafts[1]);
             config.TellCurrentDjMacro = this.djMacroDrafts[2];
+            config.CurrentDjChannel = this.djMacroChannelDrafts[0];
+            config.TransitionChannel = this.djMacroChannelDrafts[1];
             config.CurrentDjMacroDelaySeconds = this.djMacroDelayDrafts[0];
             config.TransitionMacroDelaySeconds = this.djMacroDelayDrafts[1];
             config.TellCurrentDjMacroDelaySeconds = this.djMacroDelayDrafts[2];
@@ -116,10 +127,25 @@ public sealed partial class MainWindow
         {
             config.SetStaffShoutMacro(this.staffMacroRole, Configuration.NormalizeAnnouncementMacro(this.staffMacroDraft));
             config.SetStaffShoutDelaySeconds(this.staffMacroRole, this.staffMacroDelayDraft);
+            config.SetStaffShoutChannel(this.staffMacroRole, this.staffMacroChannelDraft);
         }
         config.Save();
         this.announcementMacroKind = AnnouncementMacroKind.None;
         this.announcementMacroDiscardRequested = false;
+    }
+
+    private void DrawManualMacroChannelSelector(ref AnnouncementChannel channel, string id)
+    {
+        ImGui.PushID(id);
+        ImGui.TextColored(BackstageDesign.Muted, "CHANNEL (SMART CHANNELS OFF)");
+        if (this.WorkspaceButton("YELL", new Vector2(94f, 28f),
+                channel == AnnouncementChannel.Yell ? BackstageDesign.Gold : BackstageDesign.Muted))
+            channel = AnnouncementChannel.Yell;
+        ImGui.SameLine(0f, 8f);
+        if (this.WorkspaceButton("SHOUT", new Vector2(94f, 28f),
+                channel == AnnouncementChannel.Shout ? BackstageDesign.Gold : BackstageDesign.Muted))
+            channel = AnnouncementChannel.Shout;
+        ImGui.PopID();
     }
 
     private void DrawAnnouncementMacroEditor(Configuration config)
@@ -181,13 +207,13 @@ public sealed partial class MainWindow
                 if (this.announcementMacroKind == AnnouncementMacroKind.Dj)
                 {
                     var text = this.djMacroDrafts[this.djMacroSelected];
-                    if (ImGui.InputTextMultiline("##vhDjMacroText", ref text, 8000, new Vector2(-1f, 190f)))
+                    if (ImGui.InputTextMultiline("##vhDjMacroText", ref text, 8000, new Vector2(-1f, !config.SmartChatChannelsEnabled && this.djMacroSelected < 2 ? 140f : 190f)))
                         this.djMacroDrafts[this.djMacroSelected] = text;
                 }
                 else
                 {
                     ImGui.InputTextMultiline("##vhStaffMacroText", ref this.staffMacroDraft, 8000,
-                        new Vector2(-1f, 228f));
+                        new Vector2(-1f, config.SmartChatChannelsEnabled ? 228f : 178f));
                 }
                 ImGui.Dummy(new Vector2(0f, 9f));
                 ImGui.TextColored(BackstageDesign.Muted, MacroDelayLabel);
@@ -201,6 +227,15 @@ public sealed partial class MainWindow
                 }
                 else
                     ImGui.SliderFloat("##vhStaffMacroWait", ref this.staffMacroDelayDraft, 0f, 10f, "%.1f");
+
+                if (!config.SmartChatChannelsEnabled)
+                {
+                    ImGui.Dummy(new Vector2(0f, 9f));
+                    if (this.announcementMacroKind == AnnouncementMacroKind.Dj && this.djMacroSelected < 2)
+                        this.DrawManualMacroChannelSelector(ref this.djMacroChannelDrafts[this.djMacroSelected], "djChannel");
+                    else if (this.announcementMacroKind == AnnouncementMacroKind.Staff)
+                        this.DrawManualMacroChannelSelector(ref this.staffMacroChannelDraft, "staffChannel");
+                }
 
             }
             ImGui.EndChild();

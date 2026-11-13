@@ -376,6 +376,7 @@ public sealed partial class MainWindow
             StartTime = this.eventShoutEditorStartTime,
             EndTime = this.eventShoutEditorEndTime,
             DelaySeconds = this.eventShoutEditorDelaySeconds,
+            Channel = this.eventShoutEditorChannel,
         };
 
     private void RequestCloseShoutEditor(Configuration config)
@@ -457,6 +458,11 @@ public sealed partial class MainWindow
                 ImGui.SameLine(0f, 12f);
                 ImGui.SetNextItemWidth(150f);
                 ImGui.SliderFloat("##vhModalDelay", ref this.eventShoutEditorDelaySeconds, 0f, 10f, "%.1f");
+                if (!config.SmartChatChannelsEnabled)
+                {
+                    ImGui.Dummy(new Vector2(0f, 9f));
+                    this.DrawManualMacroChannelSelector(ref this.eventShoutEditorChannel, "eventChannel");
+                }
             }
             ImGui.EndChild();
             ImGui.PopStyleVar();
@@ -545,6 +551,7 @@ public sealed partial class MainWindow
                !string.Equals(original.Macro, this.eventShoutEditorMacro, StringComparison.Ordinal) ||
                !string.Equals(original.StartTime, this.eventShoutEditorStartTime, StringComparison.Ordinal) ||
                !string.Equals(original.EndTime, this.eventShoutEditorEndTime, StringComparison.Ordinal) ||
-               MathF.Abs(original.DelaySeconds - this.eventShoutEditorDelaySeconds) > 0.001f;
+               MathF.Abs(original.DelaySeconds - this.eventShoutEditorDelaySeconds) > 0.001f ||
+               original.Channel != this.eventShoutEditorChannel;
     }
 }

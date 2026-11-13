@@ -17,5 +17,7 @@ public sealed class StaffRoleShoutSetting
 
     public string Macro { get; set; } = string.Empty;
 
+    public AnnouncementChannel Channel { get; set; } = AnnouncementChannel.Yell;
+
     public float DelaySeconds { get; set; } = 2f;
 }

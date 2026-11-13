@@ -79,6 +79,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private string eventShoutEditorStartTime = "18:00";
     private string eventShoutEditorEndTime = "23:00";
     private float eventShoutEditorDelaySeconds = 2f;
+    private AnnouncementChannel eventShoutEditorChannel = AnnouncementChannel.Yell;
 
     public void Dispose()
     {
@@ -215,6 +216,7 @@ public sealed partial class MainWindow : Window, IDisposable
         this.eventShoutEditorStartTime = NormalizeTimeText(config.EventStartTime);
         this.eventShoutEditorEndTime = NormalizeTimeText(config.EventEndTime);
         this.eventShoutEditorDelaySeconds = 2f;
+        this.eventShoutEditorChannel = AnnouncementChannel.Yell;
         this.eventShoutEditorOpen = true;
         this.eventShoutOpeningDraft = this.BuildEventShoutPreviewDraft();
         this.eventShoutEditorFocusRequested = true;
@@ -229,6 +231,7 @@ public sealed partial class MainWindow : Window, IDisposable
         this.eventShoutEditorStartTime = NormalizeTimeText(entry.StartTime);
         this.eventShoutEditorEndTime = NormalizeTimeText(entry.EndTime);
         this.eventShoutEditorDelaySeconds = Math.Clamp(entry.DelaySeconds, 0f, 10f);
+        this.eventShoutEditorChannel = entry.Channel;
         this.eventShoutEditorOpen = true;
         this.eventShoutOpeningDraft = this.BuildEventShoutPreviewDraft();
         this.eventShoutEditorFocusRequested = true;
@@ -255,6 +258,7 @@ public sealed partial class MainWindow : Window, IDisposable
         entry.StartTime = NormalizeTimeText(this.eventShoutEditorStartTime);
         entry.EndTime = NormalizeTimeText(this.eventShoutEditorEndTime);
         entry.DelaySeconds = Math.Clamp(this.eventShoutEditorDelaySeconds, 0f, 10f);
+        entry.Channel = Configuration.NormalizeAnnouncementChannel(this.eventShoutEditorChannel);
 
         config.NormalizeEventShoutOrders();
         config.SelectedEventShoutOrder = entry.Order;

@@ -216,9 +216,9 @@ public sealed class EventShoutService : BaseService
 
         var delay = TimeSpan.FromSeconds(entry.DelaySeconds);
         if (isManual)
-            this.Chat.QueueManualMacroCommands(expandedMacro, delay);
+            this.Chat.QueueManualMacroCommands(expandedMacro, delay, entry.Channel);
         else
-            this.Chat.QueueMacroCommands(expandedMacro, delay);
+            this.Chat.QueueMacroCommands(expandedMacro, delay, manualChannel: entry.Channel);
     }
 
     /// <summary>Returns the selected event shout macro after variable expansion.</summary>

@@ -18,7 +18,7 @@ namespace VenueHost;
 [Serializable]
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentConfigVersion = 23;
+    public const int CurrentConfigVersion = 24;
 
     public const string DefaultCurrentDjMacro =
         "♪♪ Live DJ @ {VenueName}! Don’t miss the vibe ♪♪ → {CurrentDJLink}\n" +
@@ -112,9 +112,11 @@ public sealed class Configuration : IPluginConfiguration
     public bool GiveawayCommandEnabled { get; set; } = false;
 
     public string CurrentDjMacro { get; set; } = DefaultCurrentDjMacro;
+    public AnnouncementChannel CurrentDjChannel { get; set; } = AnnouncementChannel.Yell;
     public float CurrentDjMacroDelaySeconds { get; set; } = 2f;
 
     public string TransitionMacro { get; set; } = DefaultTransitionMacro;
+    public AnnouncementChannel TransitionChannel { get; set; } = AnnouncementChannel.Yell;
     public float TransitionMacroDelaySeconds { get; set; } = 2f;
 
     public string TellCurrentDjMacro { get; set; } = DefaultTellCurrentDjMacro;
@@ -193,6 +195,7 @@ public sealed class Configuration : IPluginConfiguration
         this.EnsureStaffRoleShoutSettings();
         this.ClampAutoShoutSettings();
         this.NormalizeAnnouncementMacros();
+        this.NormalizeAnnouncementChannels();
         this.EnsureShoutPriority();
     }
 
@@ -235,6 +238,7 @@ public sealed class Configuration : IPluginConfiguration
         // Version 16 adds stagger/queue spacing between automatic role shouts.
         // Version 18 adds a native chat sender status/test/fallback helper.
         // Version 19 adds Event Shouts as configurable venue-wide timed macros.
+        // Version 24 adds an independent manual Yell/Shout preference per announcement macro.
 
         // Version 3 added per-DJ giveaway toggles. Existing beta configs should keep
         // giveaway enabled for all rows, otherwise old schedules would silently lose giveaway lines.
@@ -406,6 +410,7 @@ public sealed class Configuration : IPluginConfiguration
             setting.Role = string.IsNullOrWhiteSpace(setting.Role) ? "Photographer" : setting.Role.Trim();
             setting.IntervalMinutes = Math.Clamp(setting.IntervalMinutes, 1, 120);
             setting.DelaySeconds = Math.Clamp(setting.DelaySeconds, 0f, 10f);
+            setting.Channel = NormalizeAnnouncementChannel(setting.Channel);
             if (string.IsNullOrWhiteSpace(setting.Macro))
                 setting.Macro = this.GetDefaultStaffShoutMacro(setting.Role);
         }
@@ -769,6 +774,7 @@ public sealed class Configuration : IPluginConfiguration
             entry.StartTime = NormalizeTimeText(entry.StartTime, string.IsNullOrWhiteSpace(this.EventStartTime) ? "18:00" : this.EventStartTime);
             entry.EndTime = NormalizeTimeText(entry.EndTime, string.IsNullOrWhiteSpace(this.EventEndTime) ? "23:00" : this.EventEndTime);
             entry.DelaySeconds = Math.Clamp(entry.DelaySeconds, 0f, 10f);
+            entry.Channel = NormalizeAnnouncementChannel(entry.Channel);
             entry.IntervalMinutes = Math.Clamp(entry.IntervalMinutes, 1, 240);
         }
 
@@ -822,6 +828,19 @@ public sealed class Configuration : IPluginConfiguration
         if (string.IsNullOrEmpty(macro)) return macro ?? string.Empty;
         return string.Join("\n", macro.Replace("\r", string.Empty).Split('\n')
             .Select(line => Regex.Replace(line, @"^\s*/(?:y|yell|sh|shout)(?=\s|$)\s*", "", RegexOptions.IgnoreCase)));
+    }
+
+    public static AnnouncementChannel NormalizeAnnouncementChannel(AnnouncementChannel channel)
+        => channel == AnnouncementChannel.Shout ? AnnouncementChannel.Shout : AnnouncementChannel.Yell;
+
+    public void NormalizeAnnouncementChannels()
+    {
+        this.CurrentDjChannel = NormalizeAnnouncementChannel(this.CurrentDjChannel);
+        this.TransitionChannel = NormalizeAnnouncementChannel(this.TransitionChannel);
+        foreach (var role in this.StaffRoleShoutSettings ?? [])
+            role.Channel = NormalizeAnnouncementChannel(role.Channel);
+        foreach (var entry in this.EventShouts ?? [])
+            entry.Channel = NormalizeAnnouncementChannel(entry.Channel);
     }
 
     public void NormalizeAnnouncementMacros()
@@ -1129,6 +1148,16 @@ public sealed class Configuration : IPluginConfiguration
             this.MaidShoutMacro = value;
         else if (role.Equals("Photographer", StringComparison.OrdinalIgnoreCase))
             this.PhotographerShoutMacro = value;
+    }
+
+    public AnnouncementChannel GetStaffShoutChannel(string? role)
+    {
+        return NormalizeAnnouncementChannel(this.GetOrCreateStaffRoleShoutSetting(role).Channel);
+    }
+
+    public void SetStaffShoutChannel(string? role, AnnouncementChannel channel)
+    {
+        this.GetOrCreateStaffRoleShoutSetting(role).Channel = NormalizeAnnouncementChannel(channel);
     }
 
     public float GetStaffShoutDelaySeconds(string? role)
