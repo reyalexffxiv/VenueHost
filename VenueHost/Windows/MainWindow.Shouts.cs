@@ -458,11 +458,8 @@ public sealed partial class MainWindow
                 ImGui.SameLine(0f, 12f);
                 ImGui.SetNextItemWidth(150f);
                 ImGui.SliderFloat("##vhModalDelay", ref this.eventShoutEditorDelaySeconds, 0f, 10f, "%.1f");
-                if (!config.SmartChatChannelsEnabled)
-                {
-                    ImGui.Dummy(new Vector2(0f, 9f));
-                    this.DrawManualMacroChannelSelector(ref this.eventShoutEditorChannel, "eventChannel");
-                }
+                ImGui.Dummy(new Vector2(0f, 9f));
+                this.DrawManualMacroChannelSelector(ref this.eventShoutEditorChannel, "eventChannel");
             }
             ImGui.EndChild();
             ImGui.PopStyleVar();

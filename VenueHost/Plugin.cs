@@ -19,7 +19,6 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
-    [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
 
     private static readonly string[] CommandNames = ["/venuehost", "/vhost"];
 
@@ -91,7 +90,6 @@ public sealed class Plugin : IDalamudPlugin
 
         this.GameChatService = new GameChatService(Log);
         this.Services.Add(this.GameChatService);
-        ChatGui.ChatMessage += this.ObserveChatMessage;
 
         this.ShoutService = new ShoutService(this.Configuration, this.Services);
         this.Services.Add(this.ShoutService);
@@ -193,7 +191,6 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= this.ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= this.ToggleMainUi;
         Framework.Update -= this.OnFrameworkUpdate;
-        ChatGui.ChatMessage -= this.ObserveChatMessage;
 
         foreach (var commandName in CommandNames)
             CommandManager.RemoveHandler(commandName);
@@ -205,9 +202,6 @@ public sealed class Plugin : IDalamudPlugin
         this.MainWindow.Dispose();
         this.UiService.Dispose();
     }
-
-    private void ObserveChatMessage(Dalamud.Game.Chat.IHandleableChatMessage message)
-        => this.GameChatService.ObserveChatChannel(message.LogKind);
 
     private void ToggleMainUi() => this.UiService.ToggleMainUi();
 

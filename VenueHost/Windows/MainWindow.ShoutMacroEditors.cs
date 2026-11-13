@@ -137,7 +137,9 @@ public sealed partial class MainWindow
     private void DrawManualMacroChannelSelector(ref AnnouncementChannel channel, string id)
     {
         ImGui.PushID(id);
-        ImGui.TextColored(BackstageDesign.Muted, "CHANNEL (SMART CHANNELS OFF)");
+        ImGui.TextColored(BackstageDesign.Muted, "PREFERRED CHANNEL");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Smart OFF: always use this channel.\nSmart ON: use it unless the last macro used the same channel.");
         if (this.WorkspaceButton("YELL", new Vector2(94f, 28f),
                 channel == AnnouncementChannel.Yell ? BackstageDesign.Gold : BackstageDesign.Muted))
             channel = AnnouncementChannel.Yell;
@@ -207,13 +209,13 @@ public sealed partial class MainWindow
                 if (this.announcementMacroKind == AnnouncementMacroKind.Dj)
                 {
                     var text = this.djMacroDrafts[this.djMacroSelected];
-                    if (ImGui.InputTextMultiline("##vhDjMacroText", ref text, 8000, new Vector2(-1f, !config.SmartChatChannelsEnabled && this.djMacroSelected < 2 ? 140f : 190f)))
+                    if (ImGui.InputTextMultiline("##vhDjMacroText", ref text, 8000, new Vector2(-1f, this.djMacroSelected < 2 ? 140f : 190f)))
                         this.djMacroDrafts[this.djMacroSelected] = text;
                 }
                 else
                 {
                     ImGui.InputTextMultiline("##vhStaffMacroText", ref this.staffMacroDraft, 8000,
-                        new Vector2(-1f, config.SmartChatChannelsEnabled ? 228f : 178f));
+                        new Vector2(-1f, 178f));
                 }
                 ImGui.Dummy(new Vector2(0f, 9f));
                 ImGui.TextColored(BackstageDesign.Muted, MacroDelayLabel);
@@ -228,12 +230,13 @@ public sealed partial class MainWindow
                 else
                     ImGui.SliderFloat("##vhStaffMacroWait", ref this.staffMacroDelayDraft, 0f, 10f, "%.1f");
 
-                if (!config.SmartChatChannelsEnabled)
+                if (this.announcementMacroKind == AnnouncementMacroKind.Staff ||
+                    (this.announcementMacroKind == AnnouncementMacroKind.Dj && this.djMacroSelected < 2))
                 {
                     ImGui.Dummy(new Vector2(0f, 9f));
-                    if (this.announcementMacroKind == AnnouncementMacroKind.Dj && this.djMacroSelected < 2)
+                    if (this.announcementMacroKind == AnnouncementMacroKind.Dj)
                         this.DrawManualMacroChannelSelector(ref this.djMacroChannelDrafts[this.djMacroSelected], "djChannel");
-                    else if (this.announcementMacroKind == AnnouncementMacroKind.Staff)
+                    else
                         this.DrawManualMacroChannelSelector(ref this.staffMacroChannelDraft, "staffChannel");
                 }
 

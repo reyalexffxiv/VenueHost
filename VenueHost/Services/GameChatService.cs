@@ -26,12 +26,13 @@ public sealed class GameChatService
     private readonly Queue<QueuedChatCommand> pendingCommands = new();
 
     private DateTime nextCommandAllowedAt = DateTime.MinValue;
-    // True when the most recently observed Yell/Shout was a Yell.
-    // Null means no such chat activity has been observed in this session.
-    private bool? lastWasYell;
+    // Only successfully dispatched public macros influence Smart Channels.
+    // Ordinary game chat, explicit /tell commands and individual macro lines do not.
+    private AnnouncementChannel? lastMacroChannel;
     private long nextMacroId;
-    private long? activeMacroId;
-    private AnnouncementChannel activeMacroChannel = AnnouncementChannel.Yell;
+    private readonly Dictionary<long, AnnouncementChannel> selectedMacroChannels = new();
+    // A failed first line must not count as the last successfully sent macro.
+    private readonly HashSet<long> publishedMacroIds = new();
 
 
     public GameChatService(IPluginLog log)
@@ -49,13 +50,6 @@ public sealed class GameChatService
 
     public bool HasPendingCommands => this.pendingCommands.Count > 0;
     public bool SmartChannelsEnabled { get; set; } = true;
-
-    /// <summary>Record only observed public Yell/Shout activity; no message content is retained.</summary>
-    public void ObserveChatChannel(Dalamud.Game.Text.XivChatType kind)
-    {
-        if (kind == Dalamud.Game.Text.XivChatType.Yell) this.lastWasYell = true;
-        else if (kind == Dalamud.Game.Text.XivChatType.Shout) this.lastWasYell = false;
-    }
 
     /// <summary>Pause gate for automatic dispatch only. Explicit manual announcements remain allowed.</summary>
     public bool DispatchPaused { get; private set; }
@@ -75,7 +69,14 @@ public sealed class GameChatService
             if (queued.IsManual)
                 this.pendingCommands.Enqueue(queued);
             else
+            {
                 removed++;
+                if (queued.MacroId is long cancelledId)
+                {
+                    this.selectedMacroChannels.Remove(cancelledId);
+                    this.publishedMacroIds.Remove(cancelledId);
+                }
+            }
         }
         this.LastStatus = $"Automation paused. Cancelled {removed} pending automatic commands.";
         return removed;
@@ -90,6 +91,11 @@ public sealed class GameChatService
             var command = this.pendingCommands.Dequeue();
             if (command.IsManual || !string.Equals(command.StaffRole, role, StringComparison.OrdinalIgnoreCase))
                 this.pendingCommands.Enqueue(command);
+            else if (command.MacroId is long cancelledId)
+            {
+                this.selectedMacroChannels.Remove(cancelledId);
+                this.publishedMacroIds.Remove(cancelledId);
+            }
         }
     }
 
@@ -98,7 +104,9 @@ public sealed class GameChatService
     {
         this.pendingCommands.Clear();
         this.nextCommandAllowedAt = DateTime.MinValue;
-        this.activeMacroId = null;
+        this.selectedMacroChannels.Clear();
+        this.publishedMacroIds.Clear();
+        this.lastMacroChannel = null;
         this.DispatchPaused = true;
         this.LastStatus = "Venue changed. All pending chat commands cleared; automation paused.";
     }
@@ -254,7 +262,8 @@ public sealed class GameChatService
 
         if (pendingCommand is not null)
         {
-            this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole, macroId, manualChannel);
+            this.QueueCommand(pendingCommand, pendingDelay, isManual, staffRole, macroId, manualChannel,
+                isLastMacroLine: true);
             queuedCount++;
         }
 
@@ -342,7 +351,8 @@ public sealed class GameChatService
     }
 
     private void QueueCommand(string command, TimeSpan delayAfterCommand, bool isManual,
-        string? staffRole = null, long? macroId = null, AnnouncementChannel manualChannel = AnnouncementChannel.Yell)
+        string? staffRole = null, long? macroId = null, AnnouncementChannel manualChannel = AnnouncementChannel.Yell,
+        bool isLastMacroLine = false)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -362,7 +372,7 @@ public sealed class GameChatService
         // retain their original slash prefix and are never changed to Yell/Shout.
 
         this.pendingCommands.Enqueue(new QueuedChatCommand(cleanCommand, delayAfterCommand,
-            isManual, staffRole, macroId, manualChannel));
+            isManual, staffRole, macroId, manualChannel, isLastMacroLine));
         this.LastStatus = $"Queued command: {cleanCommand}";
     }
 
@@ -385,30 +395,24 @@ public sealed class GameChatService
 
         var queuedCommand = this.pendingCommands.Peek();
         var outgoing = queuedCommand.Command;
+        var isPublicMacroLine = !outgoing.StartsWith('/') && queuedCommand.MacroId.HasValue;
+        var chosenChannel = Configuration.NormalizeAnnouncementChannel(queuedCommand.ManualChannel);
         if (!outgoing.StartsWith('/'))
         {
-            AnnouncementChannel channel;
             if (queuedCommand.MacroId is long macroId)
             {
-                // Lock the selected channel for the entire macro container.
-                // Later chat observations must not switch its remaining lines.
-                if (this.activeMacroId != macroId)
+                if (!this.selectedMacroChannels.TryGetValue(macroId, out chosenChannel))
                 {
-                    this.activeMacroId = macroId;
-                    this.activeMacroChannel = this.SmartChannelsEnabled
-                        ? (this.lastWasYell == true ? AnnouncementChannel.Shout : AnnouncementChannel.Yell)
-                        : queuedCommand.ManualChannel;
+                    // Preferred channel wins unless Smart Channels detects that the
+                    // previous public macro already used it. Never alternate per line.
+                    chosenChannel = Configuration.NormalizeAnnouncementChannel(queuedCommand.ManualChannel);
+                    if (this.SmartChannelsEnabled && this.lastMacroChannel == chosenChannel)
+                        chosenChannel = chosenChannel == AnnouncementChannel.Yell
+                            ? AnnouncementChannel.Shout : AnnouncementChannel.Yell;
+                    this.selectedMacroChannels.Add(macroId, chosenChannel);
                 }
-                channel = this.activeMacroChannel;
             }
-            else
-            {
-                this.activeMacroId = null;
-                channel = this.SmartChannelsEnabled
-                    ? (this.lastWasYell == true ? AnnouncementChannel.Shout : AnnouncementChannel.Yell)
-                    : queuedCommand.ManualChannel;
-            }
-            outgoing = (channel == AnnouncementChannel.Shout ? "/sh " : "/y ") + outgoing;
+            outgoing = (chosenChannel == AnnouncementChannel.Shout ? "/sh " : "/y ") + outgoing;
         }
         this.pendingCommands.Dequeue();
         var sent = this.TryExecuteCommandNow(outgoing);
@@ -418,9 +422,10 @@ public sealed class GameChatService
             this.LastFailedCommand = null;
             this.LastFailureAt = null;
             this.LastStatus = $"Sent command: {outgoing}";
-            // Record our own successful sends immediately; the chat event may arrive later.
-            if (outgoing.StartsWith("/y ", StringComparison.OrdinalIgnoreCase)) this.lastWasYell = true;
-            else if (outgoing.StartsWith("/sh ", StringComparison.OrdinalIgnoreCase)) this.lastWasYell = false;
+            // Only the first successfully sent public line counts as a new macro.
+            if (isPublicMacroLine && queuedCommand.MacroId is long sentMacroId &&
+                this.publishedMacroIds.Add(sentMacroId))
+                this.lastMacroChannel = chosenChannel;
             this.nextCommandAllowedAt = DateTime.Now.Add(queuedCommand.DelayAfterCommand);
         }
         else
@@ -432,6 +437,13 @@ public sealed class GameChatService
                 ? $"Failed to send command: {outgoing}"
                 : $"Failed to send command: {outgoing} ({detail})";
             this.nextCommandAllowedAt = DateTime.Now.AddSeconds(1);
+        }
+
+        // Never retain a finished macro's channel allocation indefinitely.
+        if (queuedCommand.IsLastMacroLine && queuedCommand.MacroId is long completedId)
+        {
+            this.selectedMacroChannels.Remove(completedId);
+            this.publishedMacroIds.Remove(completedId);
         }
     }
 
@@ -526,5 +538,6 @@ public sealed class GameChatService
     }
 
     private sealed record QueuedChatCommand(string Command, TimeSpan DelayAfterCommand,
-        bool IsManual, string? StaffRole, long? MacroId, AnnouncementChannel ManualChannel);
+        bool IsManual, string? StaffRole, long? MacroId, AnnouncementChannel ManualChannel,
+        bool IsLastMacroLine);
 }
